@@ -5,10 +5,11 @@ use std::hash::Hash;
 use std::rc::Rc;
 use std::collections::{HashMap, HashSet};
 use compact_str::CompactString;
-use netlistdb::{Direction, GeneralPinName, LeafPinProvider, NetlistDB};
+use netlistdb::{Direction, GeneralPinName, NetlistDB};
 use sverilogparse::SVerilogRange;
 use itertools::Itertools;
 use vcd_ng::{Parser, ScopeItem, Var, Scope, FastFlow, FastFlowToken, FFValueChange, Writer, SimulationCommand};
+use gem::aigpdk::AIGPDKLeafPins;
 
 #[derive(clap::Parser, Debug)]
 struct SimulatorArgs {
@@ -32,76 +33,6 @@ struct SimulatorArgs {
     input_vcd_scope: Option<String>,
     /// Output VCD path (must be writable)
     output_vcd: String,
-}
-
-struct AIGPDKLeafPins();
-
-impl LeafPinProvider for AIGPDKLeafPins {
-    fn direction_of(
-        &self,
-        macro_name: &CompactString,
-        pin_name: &CompactString, pin_idx: Option<isize>
-    ) -> Direction {
-        match (macro_name.as_str(), pin_name.as_str(), pin_idx) {
-            ("INV" | "BUF", "A", None) => Direction::I,
-            ("INV" | "BUF", "Y", None) => Direction::O,
-
-            ("AND2_00_0" | "AND2_01_0" | "AND2_10_0" | "AND2_11_0" |
-             "AND2_11_1", "A" | "B", None) => Direction::I,
-            ("AND2_00_0" | "AND2_01_0" | "AND2_10_0" | "AND2_11_0" |
-             "AND2_11_1", "Y", None) => Direction::O,
-
-            ("DFF", "CLK" | "D", None) => Direction::I,
-            ("DFF", "Q", None) => Direction::O,
-
-            ("DFFSR" | "LATCH" | "$__RAMGEM_ASYNC_", _, _) => {
-                panic!("Async logic (lib cell {}) not supported yet in GEM.", macro_name);
-            },
-
-            ("$__RAMGEM_SYNC_",
-             "PORT_R1_CLK" | "PORT_R2_CLK" | "PORT_W_CLK",
-             None) => Direction::I,
-            ("$__RAMGEM_SYNC_",
-             "PORT_R1_ADDR" | "PORT_R2_ADDR" | "PORT_W_ADDR",
-             Some(0..=12)) => Direction::I,
-            ("$__RAMGEM_SYNC_",
-             "PORT_W_WR_EN" | "PORT_W_WR_DATA",
-             Some(0..=31)) => Direction::I,
-            ("$__RAMGEM_SYNC_",
-             "PORT_R1_RD_DATA" | "PORT_R2_RD_DATA",
-             Some(0..=31)) => Direction::O,
-
-            _ => {
-                use netlistdb::{GeneralPinName, HierName};
-                panic!("Cannot recognize pin type {}, please make sure the verilog netlist is synthesized in GEM's aigpdk.",
-                       (HierName::single(macro_name.clone()),
-                        pin_name, pin_idx).dbg_fmt_pin());
-            }
-        }
-    }
-
-    fn width_of(
-        &self,
-        macro_name: &CompactString,
-        pin_name: &CompactString
-    ) -> Option<SVerilogRange> {
-        match (macro_name.as_str(), pin_name.as_str()) {
-            ("INV" | "BUF", "A" | "Y") => None,
-            ("AND2_00_0" | "AND2_01_0" | "AND2_10_0" | "AND2_11_0" |
-             "AND2_11_1", "A" | "B" | "Y") => None,
-            ("DFF", "CLK" | "D" | "Q") => None,
-            ("$__RAMGEM_SYNC_",
-             "PORT_R1_CLK" | "PORT_R2_CLK" | "PORT_W_CLK") => None,
-            ("$__RAMGEM_SYNC_",
-             "PORT_R1_ADDR" | "PORT_R2_ADDR" | "PORT_W_ADDR")
-                => Some(SVerilogRange(12, 0)),
-            ("$__RAMGEM_SYNC_",
-             "PORT_W_WR_EN" | "PORT_W_WR_DATA" |
-             "PORT_R1_RD_DATA" | "PORT_R2_RD_DATA")
-                => Some(SVerilogRange(31, 0)),
-            _ => None
-        }
-    }
 }
 
 /// Hierarchical name representation in VCD.
@@ -226,7 +157,7 @@ fn main() {
                     "DFF" | "$__RAMGEM_SYNC_") {
             for pinid in netlistdb.cell2pin.iter_set(cellid) {
                 if matches!(netlistdb.pinnames[pinid].1.as_str(),
-                            "CLK" | "PORT_R1_CLK" | "PORT_R2_CLK" | "PORT_W_CLK") {
+                            "CLK" | "PORT_R_CLK" | "PORT_W_CLK") {
                     let netid = netlistdb.pin2net[pinid];
                     if Some(netid) == netlistdb.net_zero || Some(netid) == netlistdb.net_one {
                         continue
@@ -323,6 +254,7 @@ fn main() {
         }
     }
     let mut topo_vis = vec![false; netlistdb.num_pins];
+    let mut topo_instack = vec![false; netlistdb.num_pins];
     let mut topo = Vec::new();
     // mark all combinational circuit inputs
     for i in netlistdb.cell2pin.iter_set(0) {
@@ -335,7 +267,7 @@ fn main() {
                     "DFF" | "$__RAMGEM_SYNC_") {
             for pinid in netlistdb.cell2pin.iter_set(cellid) {
                 if matches!(netlistdb.pinnames[pinid].1.as_str(),
-                            "Q" | "PORT_R1_RD_DATA" | "PORT_R2_RD_DATA") {
+                            "Q" | "PORT_R_RD_DATA") {
                     topo_vis[pinid] = true;
                     // do not add them to topo, but treat them separately before prop.
                 }
@@ -345,16 +277,20 @@ fn main() {
             srams.insert(cellid, vec![0u32; 1 << 13]);
         }
     }
-    fn dfs_topo(netlistdb: &NetlistDB, topo_vis: &mut Vec<bool>, topo: &mut Vec<usize>, pinid: usize) {
+    fn dfs_topo(netlistdb: &NetlistDB, topo_vis: &mut Vec<bool>, topo_instack: &mut Vec<bool>, topo: &mut Vec<usize>, pinid: usize) {
+        if topo_instack[pinid] {
+            panic!("circuit has loop!");
+        }
         if topo_vis[pinid] { return }
         topo_vis[pinid] = true;
+        topo_instack[pinid] = true;
         if netlistdb.pindirect[pinid] == Direction::I {
             let netid = netlistdb.pin2net[pinid];
             if Some(netid) != netlistdb.net_zero && Some(netid) != netlistdb.net_one {
                 let root = netlistdb.net2pin.items[
                     netlistdb.net2pin.start[netid]
                 ];
-                dfs_topo(netlistdb, topo_vis, topo, root);
+                dfs_topo(netlistdb, topo_vis, topo_instack, topo, root);
             }
         }
         else {
@@ -362,11 +298,12 @@ fn main() {
             for pinid in netlistdb.cell2pin.iter_set(cellid) {
                 if matches!(netlistdb.pinnames[pinid].1.as_str(),
                             "A" | "B") {
-                    dfs_topo(netlistdb, topo_vis, topo, pinid);
+                    dfs_topo(netlistdb, topo_vis, topo_instack, topo, pinid);
                 }
             }
         }
         topo.push(pinid);
+        topo_instack[pinid] = false;
     }
     // start from all comb. circuit outputs
     for cellid in 1..netlistdb.num_cells {
@@ -374,8 +311,8 @@ fn main() {
                     "DFF" | "$__RAMGEM_SYNC_") {
             for pinid in netlistdb.cell2pin.iter_set(cellid) {
                 if matches!(netlistdb.pinnames[pinid].1.as_str(),
-                            "D" | "PORT_R1_ADDR" | "PORT_R2_ADDR" | "PORT_W_WR_EN" | "PORT_W_ADDR" | "PORT_W_WR_DATA") {
-                    dfs_topo(&netlistdb, &mut topo_vis, &mut topo, pinid);
+                            "D" | "PORT_R_ADDR" | "PORT_W_WR_EN" | "PORT_W_ADDR" | "PORT_W_WR_DATA") {
+                    dfs_topo(&netlistdb, &mut topo_vis, &mut topo_instack, &mut topo, pinid);
                 }
             }
         }
@@ -431,8 +368,7 @@ fn main() {
                         }
                         else if netlistdb.celltypes[cellid].as_str() == "$__RAMGEM_SYNC_" {
                             let sram = srams.get_mut(&cellid).unwrap();
-                            let mut port_r1_addr = 0usize;
-                            let mut port_r2_addr = 0usize;
+                            let mut port_r_addr = 0usize;
                             let mut port_w_addr = 0usize;
                             let mut port_w_wr_en = 0u32;
                             let mut port_w_wr_data = 0u32;
@@ -448,15 +384,13 @@ fn main() {
                                     }
                                 }
                                 load_var! {
-                                    "PORT_R1_ADDR" => port_r1_addr,
-                                    "PORT_R2_ADDR" => port_r2_addr,
+                                    "PORT_R_ADDR" => port_r_addr,
                                     "PORT_W_ADDR" => port_w_addr,
                                     "PORT_W_WR_EN" => port_w_wr_en,
                                     "PORT_W_WR_DATA" => port_w_wr_data
                                 }
                             }
-                            let port_r1_rd_data = sram[port_r1_addr];
-                            let port_r2_rd_data = sram[port_r2_addr];
+                            let port_r_rd_data = sram[port_r_addr];
                             let port_w_old_data = sram[port_w_addr];
                             let port_w_data = (port_w_old_data & (!port_w_wr_en)) | (port_w_wr_data & port_w_wr_en);
                             sram[port_w_addr] = port_w_data;
@@ -472,8 +406,7 @@ fn main() {
                                     }
                                 }
                                 save_var! {
-                                    "PORT_R1_RD_DATA" <= port_r1_rd_data,
-                                    "PORT_R2_RD_DATA" <= port_r2_rd_data
+                                    "PORT_R_RD_DATA" <= port_r_rd_data
                                 }
                             }
                         }
