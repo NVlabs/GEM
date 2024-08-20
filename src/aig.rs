@@ -11,7 +11,7 @@ pub struct DFF {
     /// The D input pin with invert (last bit)
     pub d_iv: usize,
     /// If the DFF is enabled, i.e., if the clock, S, or R is active.
-    pub en: usize,
+    pub en_iv: usize,
     /// The Q pin output.
     pub q: usize,
 }
@@ -31,6 +31,49 @@ pub struct RAMBlock {
     /// this is a combination of write enable and write clock.
     pub port_w_wr_en_iv: [usize; 32],
     pub port_w_wr_data_iv: [usize; 32],
+}
+
+/// A type of endpoint group. can be a primary output-related pin,
+/// a D flip-flop, or a ram block.
+///
+/// A group means a task for the partition to complete.
+/// For primary output pins, the task is just to store.
+/// For DFFs, the task is to store only when the clock is enable.
+/// For RAMBlocks, the task is to simulate a sync SRAM.
+#[derive(Debug, Copy, Clone)]
+pub enum EndpointGroup<'i> {
+    PrimaryOutput(usize),
+    DFF(&'i DFF),
+    RAMBlock(&'i RAMBlock),
+}
+
+impl EndpointGroup<'_> {
+    /// Enumerate all related aigpin inputs for this endpoint group.
+    ///
+    /// The enumerated inputs may have duplicates.
+    pub fn for_each_input(self, mut f_nz: impl FnMut(usize)) {
+        let mut f = |i| {
+            if i >= 1 { f_nz(i); }
+        };
+        match self {
+            Self::PrimaryOutput(idx) => f(idx),
+            Self::DFF(dff) => {
+                f(dff.en_iv >> 1);
+                f(dff.d_iv >> 1);
+            },
+            Self::RAMBlock(ram) => {
+                f(ram.port_r_en_iv >> 1);
+                for i in 0..13 {
+                    f(ram.port_r_addr_iv[i] >> 1);
+                    f(ram.port_w_addr_iv[i] >> 1);
+                }
+                for i in 0..13 {
+                    f(ram.port_w_wr_en_iv[i] >> 1);
+                    f(ram.port_w_wr_data_iv[i] >> 1);
+                }
+            },
+        }
+    }
 }
 
 /// The driver type of an AIG pin.
@@ -69,21 +112,6 @@ pub struct AIG {
     ///
     /// AIG pins are guaranteed to have topological order.
     pub num_aigpins: usize,
-    /// The combinational inputs in AIG.
-    ///
-    /// They might be:
-    /// 1. input ports in netlistdb,
-    /// 2. Q pins of DFF,
-    /// 3. read out ports of RAMs.
-    pub comb_inputs: Vec<usize>,
-    /// The combinational outputs in AIG.
-    ///
-    /// They might be:
-    /// 1. output ports in netlistdb,
-    /// 2. D pins of DFF
-    /// 3. input address, write data, and write enable ports
-    ///    of RAMs.
-    pub comb_outputs: IndexSet<usize>,
     /// The mapping from a netlistdb pin to an AIG pin.
     ///
     /// The inversion bit is stored as the last bit.
@@ -99,6 +127,8 @@ pub struct AIG {
     pub drivers: Vec<DriverType>,
     /// A cache for identical and gates.
     pub and_gate_cache: IndexMap<(usize, usize), usize>,
+    /// Unique primary output aigpin indices
+    pub primary_outputs: IndexSet<usize>,
     /// The D flip-flops (DFFs), indexed by cell id
     pub dffs: IndexMap<usize, DFF>,
     /// The SRAMs, indexed by cell id
@@ -207,21 +237,17 @@ impl AIG {
                 );
                 self.pin2aigpin_iv[pinid] = self.pin2aigpin_iv[root];
             }
-            if cellid == 0 && self.pin2aigpin_iv[pinid] >= 2 {
-                self.comb_outputs.insert(self.pin2aigpin_iv[pinid] >> 1);
-            }
         }
         else if cellid == 0 {
             let aigpin = self.add_aigpin(
                 DriverType::InputPort(pinid)
             );
             self.pin2aigpin_iv[pinid] = aigpin << 1;
-            self.comb_inputs.push(aigpin);
+            self.primary_outputs.insert(aigpin);
         }
         else if matches!(netlistdb.celltypes[cellid].as_str(), "DFF" | "DFFSR") {
             let q = self.add_aigpin(DriverType::DFF(cellid));
             self.pin2aigpin_iv[pinid] = q << 1;
-            self.comb_inputs.push(q);
             let mut ap_s_iv = 1;
             let mut ap_r_iv = 1;
             let mut q_out = q;
@@ -247,7 +273,6 @@ impl AIG {
         else if netlistdb.celltypes[cellid].as_str() == "$__RAMGEM_SYNC_" {
             let o = self.add_aigpin(DriverType::SRAM(cellid));
             self.pin2aigpin_iv[pinid] = o << 1;
-            self.comb_inputs.push(o);
             assert_eq!(netlistdb.pinnames[pinid].1.as_str(),
                        "PORT_R_RD_DATA");
             let sram = self.srams.entry(cellid).or_default();
@@ -365,12 +390,9 @@ impl AIG {
                 d_in = aig.add_and_gate(d_in, ap_r_iv);
                 ap_clken_iv = aig.add_and_gate(ap_clken_iv ^ 1, ap_r_iv) ^ 1;
                 let dff = aig.dffs.entry(cellid).or_default();
-                dff.en = ap_clken_iv;
+                dff.en_iv = ap_clken_iv;
                 dff.d_iv = d_in;
                 assert_ne!(dff.q, 0);
-                if dff.d_iv >= 2 {
-                    aig.comb_outputs.insert(dff.d_iv >> 1);
-                }
             }
             else if netlistdb.celltypes[cellid].as_str() == "$__RAMGEM_SYNC_" {
                 let mut sram = aig.srams.entry(cellid).or_default().clone();
@@ -382,27 +404,18 @@ impl AIG {
 
                         "PORT_R_ADDR" => {
                             sram.port_r_addr_iv[bit.unwrap()] = pin_iv;
-                            if pin_iv >= 2 {
-                                aig.comb_outputs.insert(pin_iv >> 1);
-                            }
                         },
                         "PORT_R_CLK" => {
                             sram.port_r_en_iv = aig.trace_clock_pin(netlistdb, pinid);
                         },
                         "PORT_W_ADDR" => {
                             sram.port_w_addr_iv[bit.unwrap()] = pin_iv;
-                            if pin_iv >= 2 {
-                                aig.comb_outputs.insert(pin_iv >> 1);
-                            }
                         }
                         "PORT_W_CLK" => {
                             write_clken_iv = aig.trace_clock_pin(netlistdb, pinid);
                         },
                         "PORT_W_WR_DATA" => {
                             sram.port_w_wr_data_iv[bit.unwrap()] = pin_iv;
-                            if pin_iv >= 2 {
-                                aig.comb_outputs.insert(pin_iv >> 1);
-                            }
                         },
                         "PORT_W_WR_EN" => {
                             sram.port_w_wr_en_iv[bit.unwrap()] = pin_iv;
@@ -416,9 +429,6 @@ impl AIG {
                         or_en, write_clken_iv
                     );
                     sram.port_w_wr_en_iv[i] = or_en;
-                    if or_en >= 2 {
-                        aig.comb_outputs.insert(or_en >> 1);
-                    }
                 }
                 *aig.srams.get_mut(&cellid).unwrap() = sram;
             }
@@ -487,10 +497,26 @@ impl AIG {
             }
         }
         else {
-            for &endpoint in &self.comb_outputs {
-                dfs_topo(self, &mut vis, &mut ret, is_primary_input, endpoint);
+            for i in 1..self.num_aigpins + 1 {
+                dfs_topo(self, &mut vis, &mut ret, is_primary_input, i);
             }
         }
         ret
+    }
+
+    pub fn num_endpoint_groups(&self) -> usize {
+        self.primary_outputs.len() + self.dffs.len() + self.srams.len()
+    }
+
+    pub fn get_endpoint_group(&self, endpt_id: usize) -> EndpointGroup {
+        if endpt_id < self.primary_outputs.len() {
+            EndpointGroup::PrimaryOutput(*self.primary_outputs.get_index(endpt_id).unwrap())
+        }
+        else if endpt_id < self.primary_outputs.len() + self.dffs.len() {
+            EndpointGroup::DFF(&self.dffs[endpt_id - self.primary_outputs.len()])
+        }
+        else {
+            EndpointGroup::RAMBlock(&self.srams[endpt_id - self.primary_outputs.len() - self.dffs.len()])
+        }
     }
 }

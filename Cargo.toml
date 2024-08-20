@@ -14,7 +14,10 @@ netlistdb = { version = "0.4.6", registry = "zzdeps" }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 rayon = "1.10.0"
+serde = { version = "1.0.208", features = ["derive"] }
+serde_bare = "0.5.0"
 sverilogparse = { version = "0.4.2", registry = "zzdeps" }
+ulib = { version = "0.3.13", registry = "zzdeps" }
 vcd-ng = "0.1.2"
 
 [patch.zzdeps]

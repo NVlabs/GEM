@@ -3,6 +3,7 @@
 use crate::aig::{DriverType, AIG};
 use indexmap::{IndexMap, IndexSet};
 use cachedhash::CachedHash;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::fmt;
 use rayon::prelude::*;
@@ -52,7 +53,7 @@ impl RCHyperGraph {
     pub fn from_aig(aig: &AIG) -> RCHyperGraph {
         let timer_repcut_endpoint_process = clilog::stimer!("repcut endpoint process");
         let num_blocks = (
-            aig.comb_outputs.len() + REPCUT_BITSET_BLOCK_SIZE - 1
+            aig.num_endpoint_groups() + REPCUT_BITSET_BLOCK_SIZE - 1
         ) / REPCUT_BITSET_BLOCK_SIZE;
         let mut segments_blockid_nodeid = vec![
             Vec::<Option<Arc<CachedHash<EndpointSetSegment>>>>::new();
@@ -61,24 +62,33 @@ impl RCHyperGraph {
         segments_blockid_nodeid.par_iter_mut().enumerate().for_each(|(i_block, vs)| {
             *vs = vec![None; aig.num_aigpins + 1];
             let endpoint_block_st = i_block * REPCUT_BITSET_BLOCK_SIZE;
-            let endpoint_block_ed = aig.comb_outputs.len()
+            let endpoint_block_ed = aig.num_endpoint_groups()
                 .min(endpoint_block_st + REPCUT_BITSET_BLOCK_SIZE);
-            let endpoints = aig.comb_outputs[endpoint_block_st..endpoint_block_ed]
-                .iter().copied().collect::<Vec<_>>();
+            let mut endpoint_pins = Vec::new();
+            for endpt_i in endpoint_block_st..endpoint_block_ed {
+                aig.get_endpoint_group(endpt_i).for_each_input(|i| {
+                    endpoint_pins.push(i);
+                });
+            }
             let order_blk = aig.topo_traverse_generic(
-                Some(&endpoints),
+                Some(&endpoint_pins),
                 None
             );
-            let mut unique_segs = IndexSet::<Arc<CachedHash<EndpointSetSegment>>>::new();
+            let mut unique_segs =
+                IndexSet::<Arc<CachedHash<EndpointSetSegment>>>::new();
+            let mut ess_init: HashMap<usize, EndpointSetSegment> =
+                HashMap::new();
+            for endpt_i in endpoint_block_st..endpoint_block_ed {
+                let idx_offset = endpt_i - endpoint_block_st;
+                aig.get_endpoint_group(endpt_i).for_each_input(|i| {
+                    let ess = ess_init.entry(i).or_default();
+                    ess.bs_set[idx_offset / 64] |= 1 << (idx_offset % 64);
+                });
+            }
             for order_i in (0..order_blk.len()).rev() {
                 let i = order_blk[order_i];
-                let mut ess: CachedHash<EndpointSetSegment> = CachedHash::new(Default::default());
-                if let Some(idx) = aig.comb_outputs.get_index_of(&i) {
-                    if idx >= endpoint_block_st && idx < endpoint_block_ed {
-                        let idx_offset = idx - endpoint_block_st;
-                        ess.bs_set[idx_offset / 64] |= 1 << (idx_offset % 64);
-                    }
-                }
+                let mut ess =
+                    ess_init.remove(&i).unwrap_or_default();
                 let fs = aig.fanouts_start[i];
                 let fe = aig.fanouts_start[i + 1];
                 for fi in fs..fe {
@@ -89,7 +99,9 @@ impl RCHyperGraph {
                         }
                     }
                 }
-                let ess = Arc::new(ess);
+                let ess = Arc::new(
+                    CachedHash::new(ess)
+                );
                 let (idx, _) = unique_segs.insert_full(ess);
                 vs[i] = Some(unique_segs.get_index(idx).unwrap().clone());
             }
@@ -111,9 +123,6 @@ impl RCHyperGraph {
 
         let order_all = aig.topo_traverse_generic(None, None);
         let mut node_weights = vec![0.0f32; aig.num_aigpins + 1];
-        // println!("comb_outputs: {:?}", aig.comb_outputs);
-        // println!("order_all: {:?}", order_all);
-        // println!("drivers: {:?}", aig.drivers);
         for &i in &order_all {
             node_weights[i] = 1.;
             if let DriverType::AndGate(a, b) = aig.drivers[i] {
@@ -129,14 +138,21 @@ impl RCHyperGraph {
                 }
             }
         }
-        // println!("fanouts_start: {:?}", aig.fanouts_start);
-        // println!("node weights: {:?}", node_weights);
-        let endpoint_weights = aig.comb_outputs.iter()
-            .map(|&e| (node_weights[e] + 0.5) as u64)
-            .collect();
+        let mut num_fanouts_to_endpt = vec![0usize; aig.num_aigpins + 1];
+        for endpt_i in 0..aig.num_endpoint_groups() {
+            aig.get_endpoint_group(endpt_i).for_each_input(|i| {
+                num_fanouts_to_endpt[i] += 1;
+            });
+        }
+        let endpoint_weights = (0..aig.num_endpoint_groups()).map(|endpt_i| {
+            let mut tot = 0.0;
+            aig.get_endpoint_group(endpt_i).for_each_input(|i| {
+                tot += node_weights[i] / (num_fanouts_to_endpt[i] as f32)
+            });
+            (tot + 0.5) as u64
+        }).collect();
 
         // println!("clusters: {:#?}, endpoint_weights: {:#?}", clusters, endpoint_weights);
-
         RCHyperGraph {
             clusters, endpoint_weights
         }
