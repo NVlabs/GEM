@@ -10,6 +10,13 @@ use sverilogparse::SVerilogRange;
 /// You can use it in netlistdb construction.
 pub struct AIGPDKLeafPins();
 
+/// The addr width of an SRAM.
+///
+/// The word width is always 32.
+/// If you change this, make sure to change all other occurences in this
+/// project as well as the definitions in PDK libraries.
+pub const AIGPDK_SRAM_ADDR_WIDTH: usize = 13;
+
 impl LeafPinProvider for AIGPDKLeafPins {
     fn direction_of(
         &self,

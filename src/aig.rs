@@ -4,6 +4,7 @@
 
 use netlistdb::{NetlistDB, GeneralPinName, Direction};
 use indexmap::{IndexMap, IndexSet};
+use crate::aigpdk::AIGPDK_SRAM_ADDR_WIDTH;
 
 /// A DFF.
 #[derive(Debug, Default, Clone)]
@@ -12,20 +13,20 @@ pub struct DFF {
     pub d_iv: usize,
     /// If the DFF is enabled, i.e., if the clock, S, or R is active.
     pub en_iv: usize,
-    /// The Q pin output.
+    /// The Q pin output with invert.
     pub q: usize,
 }
 
 /// A ram block resembling the interface of `$__RAMGEM_SYNC_`.
 #[derive(Debug, Default, Clone)]
 pub struct RAMBlock {
-    pub port_r_addr_iv: [usize; 13],
+    pub port_r_addr_iv: [usize; AIGPDK_SRAM_ADDR_WIDTH],
 
     /// controls whether r_rd_data should update. (from read clock)
     pub port_r_en_iv: usize,
     pub port_r_rd_data: [usize; 32],
 
-    pub port_w_addr_iv: [usize; 13],
+    pub port_w_addr_iv: [usize; AIGPDK_SRAM_ADDR_WIDTH],
     /// controls whether memory should be updated.
     ///
     /// this is a combination of write enable and write clock.
@@ -247,10 +248,11 @@ impl AIG {
         }
         else if matches!(netlistdb.celltypes[cellid].as_str(), "DFF" | "DFFSR") {
             let q = self.add_aigpin(DriverType::DFF(cellid));
-            self.pin2aigpin_iv[pinid] = q << 1;
+            let dff = self.dffs.entry(cellid).or_default();
+            dff.q = q;
             let mut ap_s_iv = 1;
             let mut ap_r_iv = 1;
-            let mut q_out = q;
+            let mut q_out = q << 1;
             for pinid in netlistdb.cell2pin.iter_set(cellid) {
                 if !matches!(netlistdb.pinnames[pinid].1.as_str(), "S" | "R") {
                     continue
@@ -266,9 +268,8 @@ impl AIG {
                 }
             }
             q_out = self.add_and_gate(q_out ^ 1, ap_s_iv) ^ 1;
-            q_out = self.add_and_gate(q_out, ap_r_iv) ^ 1;
-            let dff = self.dffs.entry(cellid).or_default();
-            dff.q = q_out;
+            q_out = self.add_and_gate(q_out, ap_r_iv);
+            self.pin2aigpin_iv[pinid] = q_out;
         }
         else if netlistdb.celltypes[cellid].as_str() == "$__RAMGEM_SYNC_" {
             let o = self.add_aigpin(DriverType::SRAM(cellid));
@@ -401,7 +402,6 @@ impl AIG {
                     let bit = netlistdb.pinnames[pinid].2.map(|i| i as usize);
                     let pin_iv = aig.pin2aigpin_iv[pinid];
                     match netlistdb.pinnames[pinid].1.as_str() {
-
                         "PORT_R_ADDR" => {
                             sram.port_r_addr_iv[bit.unwrap()] = pin_iv;
                         },

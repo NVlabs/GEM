@@ -1,6 +1,6 @@
 //! Partition executor
 
-use crate::aig::{DriverType, AIG};
+use crate::aig::{DriverType, AIG, EndpointGroup};
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -59,6 +59,7 @@ fn build_one_boomerang_stage(
     unrealized_comb_outputs: &mut IndexSet<usize>,
     realized_inputs: &mut IndexSet<usize>,
     total_write_outs: &mut usize,
+    num_srams: usize,
 ) -> Option<BoomerangStage> {
     let mut hier = Vec::new();
     for i in 0..=BOOMERANG_NUM_STAGES {
@@ -423,7 +424,7 @@ fn build_one_boomerang_stage(
         spaces_j += 1;
     }
 
-    if *total_write_outs > BOOMERANG_MAX_WRITEOUTS {
+    if *total_write_outs > BOOMERANG_MAX_WRITEOUTS - num_srams {
         clilog::trace!("boomerang: write out overflowed");
         return None
     }
@@ -466,13 +467,13 @@ fn build_one_boomerang_stage(
                 let nd = hier[hi][j];
                 if endpoints_hier.contains(&nd) && !realized_endpoints.contains(&nd) {
                     add_write_outs.insert((j + hier[hi].len()) / 32);
-                    if add_write_outs.len() + *total_write_outs > BOOMERANG_MAX_WRITEOUTS {
+                    if add_write_outs.len() + *total_write_outs > BOOMERANG_MAX_WRITEOUTS - num_srams {
                         break
                     }
                 }
             }
         }
-        if add_write_outs.len() + *total_write_outs <= BOOMERANG_MAX_WRITEOUTS {
+        if add_write_outs.len() + *total_write_outs <= BOOMERANG_MAX_WRITEOUTS - num_srams {
             for wo in add_write_outs {
                 write_outs.push(wo);
                 *total_write_outs += 1;
@@ -504,8 +505,13 @@ impl Partition {
     pub fn build_one(aig: &AIG, endpoints: &Vec<usize>) -> Option<Partition> {
         let mut unrealized_comb_outputs = IndexSet::new();
         let mut realized_inputs = IndexSet::new();
+        let mut num_srams = 0;
         for &endpt_i in endpoints {
-            aig.get_endpoint_group(endpt_i).for_each_input(|i| {
+            let edg = aig.get_endpoint_group(endpt_i);
+            if matches!(edg, EndpointGroup::RAMBlock(_)) {
+                num_srams += 1;
+            }
+            edg.for_each_input(|i| {
                 unrealized_comb_outputs.insert(i);
             });
         }
@@ -514,7 +520,8 @@ impl Partition {
         while !unrealized_comb_outputs.is_empty() {
             let stage = build_one_boomerang_stage(
                 aig, &mut unrealized_comb_outputs,
-                &mut realized_inputs, &mut total_write_outs
+                &mut realized_inputs, &mut total_write_outs,
+                num_srams
             )?;
             stages.push(stage);
         }
