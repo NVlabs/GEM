@@ -1,0 +1,587 @@
+//! Partition scheduler and flattener
+
+use crate::aig::{AIG, EndpointGroup, DriverType};
+use crate::aigpdk::AIGPDK_SRAM_ADDR_WIDTH;
+use crate::pe::{Partition, BOOMERANG_NUM_STAGES};
+use indexmap::IndexMap;
+use std::collections::BTreeMap;
+use ulib::UVec;
+
+pub const NUM_THREADS_V1: usize = 1 << (BOOMERANG_NUM_STAGES - 5);
+
+/// A flattened script, for partition executor version 1.
+/// See [FlattenedScriptV1::blocks_data] for the format details.
+pub struct FlattenedScriptV1 {
+    /// the number of blocks
+    pub num_blocks: usize,
+    /// the CSR start indices of blocks
+    pub blocks_start: UVec<usize>,
+    /// the partition instructions.
+    ///
+    /// the instructions follow a special format.
+    /// it consists of zero or more partitions.
+    /// 1. metadata section [1x256]:
+    ///    the number of boomerang stages.
+    ///      32-bit
+    ///      if this is zero, the stage will not run. only happens
+    ///      when the block has no partition mapped onto it.
+    ///    is this the last boomerang stage?
+    ///      32-bit, only 0 or 1
+    ///    the read-in&write-out destination offset.
+    ///      32-bit
+    ///      (at this offset, we put all FFs and other outputs.)
+    ///    the srams count and offsets.
+    ///      32-bit count
+    ///      32-bit memory offset for the first mem.
+    ///    the number of global read rounds
+    ///      32-bit count
+    ///    the number of additional endpoint-copy dwords
+    ///      32-bit count
+    ///      this is used when one output pin is used by either
+    ///      <both output and FFs>, or <multiple FFs with different
+    ///      enabling conditions>.
+    ///    padding towards 128
+    ///    the location of early write-outs, excl. mem.
+    ///      256 * [#boomstage & 0~256 id], compressed to 128
+    /// 2. initial read-global permutation [2x]*rounds
+    ///    32-bit indices*1 for each of the 256 threads.
+    ///    32-bit valid mask for each of the 256 threads.
+    ///    if the valid mask is zero, the memory is not read.
+    ///    the result should be stored "like pdep instruction",
+    ///    but "reversed", and then appended to the low bits
+    ///    in each round.
+    /// 3. boomerang sections, repeat below N*16
+    ///    1. local shuffle permutation
+    ///       32-bit indices * 16 for each of the 256 threads.
+    ///    2. input (with inv) * 8192bits * 3 -> fused to last cycle.
+    ///       ~~32-bit * 256 threads * 2~~
+    ///       0xy: and gate, out = (a^x)&(b^y).
+    ///       100: passthrough, out = a.
+    ///       111: invalid, can be skipped.
+    ///    -. write out, according to rest
+    /// 4. global write-outs.
+    ///    1. sram & additional endpoint copy permutations, inv. [16x, 1 compressed].
+    ///       only the inputs within sram and endpoint copy
+    ///       range will be considered.
+    ///
+    ///    2. permutation for the write-out enabler pins, inv. [16]
+    ///       include itself inv and data inv.
+    ///    -. commit the write-out
+    pub blocks_data: UVec<u32>,
+    /// the u32 array length for storing states.
+    ///
+    /// states include primary circuit inputs, outputs,
+    /// DFF pins, and SRAM storage.
+    ///
+    /// layout is [inputs, outputs & states, srams].
+    /// the 3 parts will be padded to be multiple of 32.
+    pub state_size: u32,
+    /// expected input AIG pins layout
+    pub input_layout: Vec<usize>,
+    /// maps from output AIG pins to state offset
+    pub output_map: IndexMap<usize, u32>,
+}
+
+fn map_global_read_to_rounds(
+    inputs_taken: &BTreeMap<u32, u32>
+) -> Vec<Vec<(u32, u32)>> {
+    let inputs_taken = inputs_taken.iter()
+        .map(|(&a, &b)| (a, b)).collect::<Vec<_>>();
+    // the larger the sorting chunk size, the better the successful chance,
+    // but the less efficient due to worse cache coherency.
+    let mut chunk_size = inputs_taken.len();
+    while chunk_size >= 1 {
+        let mut slices = inputs_taken.chunks(chunk_size).collect::<Vec<_>>();
+        slices.sort_by_cached_key(|&slice| {
+            u32::MAX - slice.iter()
+                .map(|(_, mask)| mask.count_ones()).sum::<u32>()
+        });
+        let mut rounds_idx_masks: Vec<Vec<(u32, u32)>> = vec![vec![]; NUM_THREADS_V1];
+        let mut round_map_j = 0;
+        let mut fail = false;
+        for slice in slices {
+            for &(offset, mask) in slice {
+                let wrap_fail_j = round_map_j;
+                while rounds_idx_masks[round_map_j].iter().map(|(_, mask)| mask.count_ones()).sum::<u32>() + mask.count_ones() > 32 {
+                    round_map_j += 1;
+                    if round_map_j == NUM_THREADS_V1 {
+                        round_map_j = 0;
+                    }
+                    if round_map_j == wrap_fail_j {
+                        // panic!("failed to map at part {} mem offset {}", i, offset);
+                        fail = true;
+                        break
+                    }
+                }
+                rounds_idx_masks[round_map_j].push((offset, mask));
+            }
+            if fail { break }
+        }
+        if !fail {
+            return rounds_idx_masks
+        }
+        chunk_size /= 2;
+    }
+    panic!("cannot map global init to any multiples of rounds.");
+}
+
+#[derive(Clone, Default)]
+struct FlatteningPart {
+    /// for each boomerang stage, the result bits layout.
+    afters: Vec<Vec<usize>>,
+    /// for each partition, the output bits layout not containing sram outputs yet.
+    parts_after_writeouts: Vec<usize>,
+
+    /// the starting offset for FFs, outputs, and SRAM read results.
+    state_start: u32,
+    /// the starting offset of SRAM storage.
+    sram_start: u32,
+    /// the number of SRAMs to simulate in this part.
+    num_srams: u32,
+
+    /// the partial permutation instructions for
+    /// 1. sram inputs
+    /// 2. duplicated output pins due to difference in polarity/clock en.
+    ///
+    /// bits 0~12: index.
+    /// bit 13: inv.      bit 14: set zero.
+    sram_duplicate_permute: Vec<u16>,
+    /// the permutation for clock enable pins, and the polarity of data.
+    ///
+    /// bits 0~12: clock en index.
+    /// bit 13: clock en inv.      bit 14: clock en set zero.
+    /// bit 15: data inv.
+    clken_permute: Vec<u16>,
+    /// the number of duplicate permute words
+    num_duplicate_words: u32,
+}
+
+impl FlatteningPart {
+    fn init_afters_writeouts(&mut self, part: &Partition) {
+        let afters = part.stages.iter().map(|s| {
+            let mut after = Vec::with_capacity(1 << BOOMERANG_NUM_STAGES);
+            after.push(usize::MAX);
+            for i in (1..=BOOMERANG_NUM_STAGES).rev() {
+                after.extend(s.hier[i].iter().copied());
+            }
+            after
+        }).collect::<Vec<_>>();
+        let wos = part.stages.iter().zip(afters.iter()).map(|(s, after)| {
+            s.write_outs.iter().map(|&woi| {
+                after[woi * 32..(woi + 1) * 32].iter().copied()
+            }).flatten()
+        }).flatten().collect::<Vec<_>>();
+
+        self.afters = afters;
+        self.parts_after_writeouts = wos;
+    }
+
+    fn make_outputs(&mut self, aig: &AIG, part: &Partition, output_map: &mut IndexMap<usize, u32>) {
+        let pin2pos = self.parts_after_writeouts.iter().enumerate()
+            .filter_map(|(i, &pin)| {
+                if pin == usize::MAX { None }
+                else { Some((pin, i as u16)) }
+            })
+            .collect::<IndexMap<_, _>>();
+
+        // map: output aig pin id -> ((clken, data iv) -> pos)
+        let mut comb_outputs_activations =
+            IndexMap::<usize, IndexMap<usize, Option<u16>>>::new();
+
+        for &endpt_i in &part.endpoints {
+            match aig.get_endpoint_group(endpt_i) {
+                EndpointGroup::RAMBlock(_) => {},
+                EndpointGroup::PrimaryOutput(idx) => {
+                    comb_outputs_activations.entry(idx >> 1)
+                        .or_default().insert(idx & 1, None);
+                },
+                EndpointGroup::DFF(dff) => {
+                    comb_outputs_activations.entry(dff.d_iv >> 1)
+                        .or_default().insert(
+                            dff.en_iv << 1 | (dff.d_iv & 1),
+                            None);
+                },
+            }
+        }
+
+        let mut sram_duplicate_permute = vec![1u16 << 14; 1 << BOOMERANG_NUM_STAGES]; // with inv(13), set0(14)
+        let mut clken_permute = vec![1u16 << 14; 1 << BOOMERANG_NUM_STAGES]; // with inv(13), set0(14), inv_data(15)
+
+        let query_permute_with_pin_iv = |pin_iv: usize| -> u16 {
+            if pin_iv <= 1 {
+                return (1 << 14) | ((pin_iv as u16) << 13)
+            }
+            let pos = *pin2pos.get(&(pin_iv >> 1)).unwrap();
+            pos | (((pin_iv & 1) as u16) << 13)
+        };
+
+        let mut cnt_duplicate_permute = 0;
+        // create a duplicate pin when necessary.
+        let mut get_output_with_activation = |pin_iv: usize, clken_iv: usize, clken_permute: &mut Vec<u16>, sram_duplicate_permute: &mut Vec<u16>| -> u16 {
+            let (activ_idx, _, pos) =
+                comb_outputs_activations.get_mut(&(pin_iv >> 1)).unwrap()
+                .get_full_mut(&(clken_iv << 1 | (pin_iv & 1))).unwrap();
+            if let Some(pos) = *pos {
+                return pos
+            }
+            let clken_iv_perm = query_permute_with_pin_iv(clken_iv);
+            let origpos = *pin2pos.get(&(pin_iv >> 1)).unwrap();
+            let r_pos = if activ_idx == 0 {
+                clken_permute[origpos as usize] = clken_iv_perm | (((pin_iv >> 1) as u16) << 13);
+                origpos
+            }
+            else {
+                cnt_duplicate_permute += 1;
+                let dup_pos = ((1 << BOOMERANG_NUM_STAGES) - self.num_srams * 32 - cnt_duplicate_permute) as u16;
+                sram_duplicate_permute[dup_pos as usize] = origpos;
+                clken_permute[dup_pos as usize] = clken_iv_perm | (((pin_iv >> 1) as u16) << 13);
+                dup_pos
+            };
+            *pos = Some(r_pos);
+            r_pos
+        };
+
+        let mut cur_sram_id = 0;
+        for &endpt_i in &part.endpoints {
+            match aig.get_endpoint_group(endpt_i) {
+                EndpointGroup::RAMBlock(ram) => {
+                    let sram_rd_data_local_offset = NUM_THREADS_V1 - self.num_srams as usize + cur_sram_id as usize;
+                    let sram_rd_data_global_start = self.state_start + NUM_THREADS_V1 as u32 - self.num_srams + cur_sram_id;
+                    let perm_r_en_iv = query_permute_with_pin_iv(ram.port_r_en_iv);
+                    for k in 0..32 {
+                        let d = ram.port_r_rd_data[k];
+                        if d == usize::MAX { continue }
+                        output_map.insert(d, sram_rd_data_global_start * 32 + k as u32);
+                        clken_permute[sram_rd_data_local_offset + k] = perm_r_en_iv;
+                    }
+                    let sram_input_perm_st = (cur_sram_id * 32 * 4) as usize;
+                    for k in 0..13 {
+                        sram_duplicate_permute[sram_input_perm_st + k] = query_permute_with_pin_iv(ram.port_r_addr_iv[k]);
+                        sram_duplicate_permute[sram_input_perm_st + 16 + k] = query_permute_with_pin_iv(ram.port_w_addr_iv[k]);
+                    }
+                    for k in 0..32 {
+                        sram_duplicate_permute[sram_input_perm_st + 32 + k] = query_permute_with_pin_iv(ram.port_w_wr_en_iv[k]);
+                        sram_duplicate_permute[sram_input_perm_st + 64 + k] = query_permute_with_pin_iv(ram.port_w_wr_data_iv[k]);
+                    }
+                    cur_sram_id += 1;
+                },
+                EndpointGroup::PrimaryOutput(idx_iv) => {
+                    let pos = self.state_start * 32 + get_output_with_activation(
+                        idx_iv, 0,
+                        &mut clken_permute, &mut sram_duplicate_permute
+                    ) as u32;
+                    output_map.insert(idx_iv, pos);
+                },
+                EndpointGroup::DFF(dff) => {
+                    let pos = self.state_start * 32 + get_output_with_activation(
+                        dff.d_iv, dff.en_iv,
+                        &mut clken_permute, &mut sram_duplicate_permute
+                    ) as u32;
+                    output_map.insert(dff.q, pos);
+                },
+            }
+        }
+        assert_eq!(cur_sram_id, self.num_srams);
+
+        self.sram_duplicate_permute = sram_duplicate_permute;
+        self.clken_permute = clken_permute;
+        self.num_duplicate_words = (cnt_duplicate_permute + 31) / 32;
+    }
+
+    fn build_script(&self, aig: &AIG, part: &Partition, output_map: &IndexMap<usize, u32>) -> Vec<u32> {
+        let mut script = Vec::<u32>::new();
+
+        // metadata
+        script.push(part.stages.len() as u32);
+        script.push(0);
+        script.push(self.state_start);
+        script.push(self.num_srams);
+        script.push(self.sram_start);
+        script.push(self.num_duplicate_words);
+        // padding
+        while script.len() != NUM_THREADS_V1 - 128 {
+            script.push(0);
+        }
+        // final 128: write-out locations
+        // compressed 2-1
+        let mut last_wo = u32::MAX;
+        for (j, bs) in part.stages.iter().enumerate() {
+            for &wo in &bs.write_outs {
+                let cur_wo = (j as u32) << 8 | (wo as u32);
+                if last_wo == u32::MAX {
+                    last_wo = cur_wo;
+                }
+                else {
+                    script.push(last_wo << 16 | cur_wo);
+                    last_wo = u32::MAX;
+                }
+            }
+
+        }
+        if last_wo != u32::MAX {
+            script.push(last_wo << 16 | ((1 << 16) - 1));
+        }
+        while script.len() < 256 {
+            script.push(u32::MAX);
+        }
+        // read global (256x32)
+        let mut inputs_taken = BTreeMap::<u32, u32>::new();
+        for &inp in &part.stages[0].hier[0] {
+            if inp == usize::MAX { continue }
+            let pos = match output_map.get(&inp) {
+                Some(idx) => *idx,
+                None => {
+                    panic!("cannot find input pin {}, driver: {:?}", inp, aig.drivers[inp]);
+                }
+            };
+            *inputs_taken.entry(pos >> 5).or_default() |=
+                1 << (pos & 31);
+        }
+        // clilog::debug!(
+        //     "part {} inputs_taken len {}: {:?}", i,
+        //     inputs_taken.len(),
+        //     inputs_taken.iter().map(|(id, val)| format!("{}[{}]", id, val.count_ones())).collect::<Vec<_>>()
+        // );
+        let rounds_idx_masks = map_global_read_to_rounds(
+            &inputs_taken
+        );
+        let num_global_stages = rounds_idx_masks.iter()
+            .map(|v| v.len()).max().unwrap() as u32;
+        script[4] = num_global_stages;
+        assert_eq!(script.len(), NUM_THREADS_V1);
+        let global_perm_start = script.len();
+        script.extend((0..(2 * num_global_stages as usize * NUM_THREADS_V1)).map(|_| 0));
+        for (i, v) in rounds_idx_masks.iter().enumerate() {
+            for (round, &(idx, mask)) in v.iter().enumerate() {
+                script[global_perm_start + NUM_THREADS_V1 * 2 * round + i] = idx;
+                script[global_perm_start + NUM_THREADS_V1 * (2 * round + 1) + i] = mask;
+            }
+        }
+
+        let outputpos2localpos = rounds_idx_masks.iter().enumerate().map(|(local_i, v)| {
+            let mut local_op2lp = Vec::with_capacity(32);
+            let mut bit_id = 0;
+            for &(idx, mask) in v {
+                for k in 0..32 {
+                    if (mask >> k & 1) != 0 {
+                        local_op2lp.push((idx << 5 | k, (local_i * 32 + bit_id) as u16));
+                        bit_id += 1;
+                    }
+                }
+            }
+            local_op2lp.into_iter()
+        }).flatten().collect::<IndexMap<_, _>>();
+
+        let mut last_pin2localpos = IndexMap::new();
+        for &inp in &part.stages[0].hier[0] {
+            if inp == usize::MAX { continue }
+            let pos = *output_map.get(&inp).unwrap();
+            last_pin2localpos.insert(inp, *outputpos2localpos.get(&pos).unwrap());
+        }
+
+        // boomerang sections start
+        for (bs_i, bs) in part.stages.iter().enumerate() {
+            let mut bs_perm = bs.hier[0].iter().map(|&pin| {
+                if pin == usize::MAX { 0 }
+                else { *last_pin2localpos.get(&pin).unwrap() }
+            }).collect::<Vec<_>>();
+
+            for hi in 1..bs.hier.len() {
+                let hi_len = bs.hier[hi].len();
+                for j in 0..hi_len {
+                    let out = bs.hier[hi][j];
+                    let a = bs.hier[hi - 1][j];
+                    let b = bs.hier[hi - 1][j + hi_len];
+                    if out == usize::MAX {
+                        continue
+                    }
+                    if out == a {
+                        bs_perm[hi_len + j] |= 1u16 << 15;
+                        continue
+                    }
+                    let (a_iv, b_iv) = match aig.drivers[out] {
+                        DriverType::AndGate(a_iv, b_iv) => (a_iv, b_iv),
+                        _ => unreachable!()
+                    };
+                    assert_eq!(a_iv >> 1, a);
+                    assert_eq!(b_iv >> 1, b);
+                    if (a_iv & 1) != 0 {
+                        bs_perm[hi_len + j] |= 1u16 << 14;
+                    }
+                    if (b_iv & 1) != 0 {
+                        bs_perm[hi_len + j] |= 1u16 << 13;
+                    }
+                }
+            }
+            for i in (0..bs_perm.len()).step_by(2) {
+                script.push(((bs_perm[i] as u32) << 16) |
+                          (bs_perm[i + 1] as u32));
+            }
+
+            last_pin2localpos = self.afters[bs_i].iter().enumerate().filter_map(|(i, &pin)| {
+                if pin == usize::MAX { None }
+                else { Some((pin, i as u16)) }
+            }).collect::<IndexMap<_, _>>();
+        }
+
+        // sram worker
+        for i in (0..self.sram_duplicate_permute.len()).step_by(2) {
+            script.push(((self.sram_duplicate_permute[i] as u32) << 16) |
+                        (self.sram_duplicate_permute[i + 1] as u32));
+        }
+        for i in (0..self.clken_permute.len()).step_by(2) {
+            script.push(((self.clken_permute[i] as u32) << 16) |
+                        (self.clken_permute[i + 1] as u32));
+        }
+
+        script
+    }
+}
+
+fn build_flattened_script_v1(
+    aig: &AIG, init_parts: &[Partition], num_blocks: usize,
+    input_layout: Vec<usize>
+) -> FlattenedScriptV1 {
+    // first arrange parts onto blocks.
+    let mut blocks_parts = vec![vec![]; num_blocks];
+    let mut tot_nstages_blocks = vec![0; num_blocks];
+    // masonry layout of blocks. assume parts are sorted with
+    // decreasing order of #stages.
+    for i in 0..init_parts.len().min(num_blocks) {
+        blocks_parts[i].push(i);
+        tot_nstages_blocks[i] = init_parts[i].stages.len();
+    }
+    for i in num_blocks..init_parts.len() {
+        let put = tot_nstages_blocks.iter().enumerate()
+            .max_by(|(_, a), (_, b)| a.cmp(b))
+            .unwrap().0;
+        blocks_parts[put].push(i);
+        tot_nstages_blocks[put] += init_parts[i].stages.len();
+    }
+
+    // the intermediates for parts being flattened
+    let mut flattening_parts: Vec<FlatteningPart> =
+        vec![Default::default(); init_parts.len()];
+
+    // basic index preprocessing for stages
+    for i in 0..init_parts.len() {
+        flattening_parts[i].init_afters_writeouts(&init_parts[i]);
+    }
+
+    // allocate output state positions for all srams,
+    // in the order of block affinity.
+    let states_start = ((input_layout.len() + 31) / 32) as u32;
+    let mut sum_state_start = states_start;
+    let srams_start = states_start +
+        (init_parts.len() * NUM_THREADS_V1) as u32;
+    let mut sum_srams_start = srams_start;
+    for block in &blocks_parts {
+        for &part_id in block {
+            let cur_state_start = sum_state_start;
+            sum_state_start += NUM_THREADS_V1 as u32;
+            flattening_parts[part_id].state_start = cur_state_start;
+
+            let num_srams = init_parts[part_id].endpoints.iter().map(|i| {
+                if matches!(aig.get_endpoint_group(*i),
+                            EndpointGroup::RAMBlock(_)) { 1 }
+                else { 0 }
+            }).sum::<u32>();
+            let cur_srams_start = sum_srams_start;
+            sum_srams_start += num_srams * (1 << AIGPDK_SRAM_ADDR_WIDTH);
+            flattening_parts[part_id].sram_start = cur_srams_start;
+            flattening_parts[part_id].num_srams = num_srams;
+        }
+    }
+    let state_size = sum_srams_start;
+
+    // determine the output position.
+    // this is the prerequisite for generating the read
+    // permutations and more.
+    // output map:
+    // locate input pins and FF/SRAM outputs - for partition input
+    // locate primary outputs - for circuit outs
+    let mut output_map = IndexMap::new();
+    for (i, &input) in input_layout.iter().enumerate() {
+        if input == usize::MAX { continue }
+        output_map.insert(input, i as u32);
+    }
+    // besides input ports, we also have outputs from partitions.
+    // they include original-placed comb output pins,
+    // copied pins for different FF activation,
+    // and SRAM read outputs.
+    for part_id in 0..init_parts.len() {
+        flattening_parts[part_id].make_outputs(
+            aig, &init_parts[part_id], &mut output_map
+        );
+    }
+
+    // build script per part. we will later assemble them to blocks.
+    let mut parts_data_split = vec![vec![]; num_blocks];
+    for part_id in 0..init_parts.len() {
+        println!("building script for part {}", part_id);
+        parts_data_split[part_id] = flattening_parts[part_id].build_script(
+            aig, &init_parts[part_id], &output_map
+        );
+    }
+
+    // assemble script per block.
+    let mut blocks_data = Vec::<u32>::with_capacity(
+        parts_data_split.iter().map(|d| d.len()).sum()
+    );
+    let mut blocks_start = Vec::<usize>::with_capacity(num_blocks + 1);
+    for block_id in 0..num_blocks {
+        blocks_start.push(blocks_data.len());
+        if blocks_parts[block_id].is_empty() {
+            let mut dummy = vec![0; NUM_THREADS_V1];
+            dummy[1] = 1;
+            blocks_data.extend(dummy.into_iter());
+        }
+        else {
+            let num_parts = blocks_parts[block_id].len();
+            let mut last_part_st = usize::MAX;
+            for (i, &part_id) in blocks_parts[block_id].iter().enumerate() {
+                if i == num_parts - 1 {
+                    last_part_st = blocks_data.len();
+                }
+                blocks_data.extend(parts_data_split[part_id].iter().copied());
+            }
+            assert_ne!(last_part_st, usize::MAX);
+            blocks_data[last_part_st + 1] = 1;
+        }
+    }
+    blocks_start.push(blocks_data.len());
+
+    clilog::info!("Built script for {} blocks, state size {}, script size {}",
+                  num_blocks, state_size, blocks_data.len());
+
+    FlattenedScriptV1 {
+        num_blocks,
+        blocks_start: blocks_start.into(),
+        blocks_data: blocks_data.into(),
+        state_size,
+        input_layout,
+        output_map
+    }
+}
+
+impl FlattenedScriptV1 {
+    /// build a flattened script.
+    ///
+    /// `init_parts` give the partitions to flatten.
+    /// it is better sorted in advance in descending order
+    /// of #layers for better duty cycling.
+    ///
+    /// `num_blocks` should be set to the hardware allowances,
+    /// i.e. the number of SMs in your GPU.
+    /// for example, A100 should set it to 108.
+    ///
+    /// `input_layout` should give the expected primary input
+    /// memory layout, each one is an AIG bit index.
+    /// padding bits should be set to usize::MAX.
+    pub fn from(
+        aig: &AIG, init_parts: &[Partition], num_blocks: usize,
+        input_layout: Vec<usize>
+    ) -> FlattenedScriptV1 {
+        build_flattened_script_v1(aig, init_parts, num_blocks, input_layout)
+    }
+}

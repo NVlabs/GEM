@@ -57,7 +57,7 @@ impl EndpointGroup<'_> {
             if i >= 1 { f_nz(i); }
         };
         match self {
-            Self::PrimaryOutput(idx) => f(idx),
+            Self::PrimaryOutput(idx) => f(idx >> 1),
             Self::DFF(dff) => {
                 f(dff.en_iv >> 1);
                 f(dff.d_iv >> 1);
@@ -68,7 +68,7 @@ impl EndpointGroup<'_> {
                     f(ram.port_r_addr_iv[i] >> 1);
                     f(ram.port_w_addr_iv[i] >> 1);
                 }
-                for i in 0..13 {
+                for i in 0..32 {
                     f(ram.port_w_wr_en_iv[i] >> 1);
                     f(ram.port_w_wr_data_iv[i] >> 1);
                 }
@@ -237,6 +237,9 @@ impl AIG {
                     root
                 );
                 self.pin2aigpin_iv[pinid] = self.pin2aigpin_iv[root];
+                if cellid == 0 {
+                    self.primary_outputs.insert(self.pin2aigpin_iv[pinid]);
+                }
             }
         }
         else if cellid == 0 {
@@ -244,7 +247,6 @@ impl AIG {
                 DriverType::InputPort(pinid)
             );
             self.pin2aigpin_iv[pinid] = aigpin << 1;
-            self.primary_outputs.insert(aigpin);
         }
         else if matches!(netlistdb.celltypes[cellid].as_str(), "DFF" | "DFFSR") {
             let q = self.add_aigpin(DriverType::DFF(cellid));

@@ -59,7 +59,7 @@ fn build_one_boomerang_stage(
     unrealized_comb_outputs: &mut IndexSet<usize>,
     realized_inputs: &mut IndexSet<usize>,
     total_write_outs: &mut usize,
-    num_srams: usize,
+    num_reserved_writeouts: usize,
 ) -> Option<BoomerangStage> {
     let mut hier = Vec::new();
     for i in 0..=BOOMERANG_NUM_STAGES {
@@ -424,7 +424,7 @@ fn build_one_boomerang_stage(
         spaces_j += 1;
     }
 
-    if *total_write_outs > BOOMERANG_MAX_WRITEOUTS - num_srams {
+    if *total_write_outs > BOOMERANG_MAX_WRITEOUTS - num_reserved_writeouts {
         clilog::trace!("boomerang: write out overflowed");
         return None
     }
@@ -467,13 +467,13 @@ fn build_one_boomerang_stage(
                 let nd = hier[hi][j];
                 if endpoints_hier.contains(&nd) && !realized_endpoints.contains(&nd) {
                     add_write_outs.insert((j + hier[hi].len()) / 32);
-                    if add_write_outs.len() + *total_write_outs > BOOMERANG_MAX_WRITEOUTS - num_srams {
+                    if add_write_outs.len() + *total_write_outs > BOOMERANG_MAX_WRITEOUTS - num_reserved_writeouts {
                         break
                     }
                 }
             }
         }
-        if add_write_outs.len() + *total_write_outs <= BOOMERANG_MAX_WRITEOUTS - num_srams {
+        if add_write_outs.len() + *total_write_outs <= BOOMERANG_MAX_WRITEOUTS - num_reserved_writeouts {
             for wo in add_write_outs {
                 write_outs.push(wo);
                 *total_write_outs += 1;
@@ -506,22 +506,35 @@ impl Partition {
         let mut unrealized_comb_outputs = IndexSet::new();
         let mut realized_inputs = IndexSet::new();
         let mut num_srams = 0;
+        let mut comb_outputs_activations = IndexMap::<usize, IndexSet<usize>>::new();
         for &endpt_i in endpoints {
             let edg = aig.get_endpoint_group(endpt_i);
-            if matches!(edg, EndpointGroup::RAMBlock(_)) {
-                num_srams += 1;
-            }
             edg.for_each_input(|i| {
                 unrealized_comb_outputs.insert(i);
             });
+            match edg {
+                EndpointGroup::DFF(dff) => {
+                    comb_outputs_activations.entry(dff.d_iv >> 1).or_default().insert(dff.en_iv);
+                },
+                EndpointGroup::PrimaryOutput(pin) => {
+                    comb_outputs_activations.entry(pin >> 1).or_default().insert(0);
+                },
+                EndpointGroup::RAMBlock(_) => {
+                    num_srams += 1;
+                },
+            }
         }
+        let num_output_dups = comb_outputs_activations.iter()
+            .map(|(_, ckens)| ckens.len() - 1)
+            .sum::<usize>();
+        let num_reserved_writeouts = num_srams + (num_output_dups + 31) / 32;
         let mut stages = Vec::<BoomerangStage>::new();
         let mut total_write_outs = 0;
         while !unrealized_comb_outputs.is_empty() {
             let stage = build_one_boomerang_stage(
                 aig, &mut unrealized_comb_outputs,
                 &mut realized_inputs, &mut total_write_outs,
-                num_srams
+                num_reserved_writeouts
             )?;
             stages.push(stage);
         }
