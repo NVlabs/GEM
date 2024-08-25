@@ -65,17 +65,17 @@ fn main() {
         }
     }
 
-    for (netlist_pin, aigpin) in aig.pin2aigpin_iv.iter().enumerate() {
-        if (aigpin >> 1) == 23011 {
-            clilog::debug!("test: netlist_pin {} ({}), aigpin {}",
-                           netlist_pin, netlistdb.pinnames[netlist_pin].dbg_fmt_pin(), aigpin);
-        }
-    }
-    for (cellid, dff) in &aig.dffs {
-        if (dff.q >> 1) == 23011 {
-            clilog::debug!("test: dff cellid {}: {:?}", cellid, dff);
-        }
-    }
+    // for (netlist_pin, aigpin) in aig.pin2aigpin_iv.iter().enumerate() {
+    //     if (aigpin >> 1) == 23011 {
+    //         clilog::debug!("test: netlist_pin {} ({}), aigpin {}",
+    //                        netlist_pin, netlistdb.pinnames[netlist_pin].dbg_fmt_pin(), aigpin);
+    //     }
+    // }
+    // for (cellid, dff) in &aig.dffs {
+    //     if (dff.q >> 1) == 23011 {
+    //         clilog::debug!("test: dff cellid {}: {:?}", cellid, dff);
+    //     }
+    // }
 
     let _ = FlattenedScriptV1::from(
         &aig, &effective_parts, 108, input_layout

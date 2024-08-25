@@ -27,6 +27,8 @@ pub struct FlattenedScriptV1 {
     ///      when the block has no partition mapped onto it.
     ///    is this the last boomerang stage?
     ///      32-bit, only 0 or 1
+    ///    the number of valid read-in and write-outs.
+    ///      32-bit
     ///    the read-in&write-out destination offset.
     ///      32-bit
     ///      (at this offset, we put all FFs and other outputs.)
@@ -35,7 +37,7 @@ pub struct FlattenedScriptV1 {
     ///      32-bit memory offset for the first mem.
     ///    the number of global read rounds
     ///      32-bit count
-    ///    the number of additional endpoint-copy dwords
+    ///    the number of output-duplicate writeouts
     ///      32-bit count
     ///      this is used when one output pin is used by either
     ///      <both output and FFs>, or <multiple FFs with different
@@ -76,6 +78,8 @@ pub struct FlattenedScriptV1 {
     /// layout is [inputs, outputs & states, srams].
     /// the 3 parts will be padded to be multiple of 32.
     pub state_size: u32,
+    /// the state size including DFF and I/O states only.
+    pub reg_io_state_size: u32,
     /// expected input AIG pins layout
     pub input_layout: Vec<usize>,
     /// maps from output AIG pins to state offset
@@ -131,13 +135,21 @@ struct FlatteningPart {
     afters: Vec<Vec<usize>>,
     /// for each partition, the output bits layout not containing sram outputs yet.
     parts_after_writeouts: Vec<usize>,
+    /// the number of SRAMs to simulate in this part.
+    num_srams: u32,
+    /// number of normal writeouts
+    num_normal_writeouts: u32,
+    /// number of writeout slots for output duplication
+    num_duplicate_writeouts: u32,
+    /// number of total writeouts
+    num_writeouts: u32,
+    /// the outputs categorized into activations
+    comb_outputs_activations: IndexMap<usize, IndexMap<usize, Option<u16>>>,
 
     /// the starting offset for FFs, outputs, and SRAM read results.
     state_start: u32,
     /// the starting offset of SRAM storage.
     sram_start: u32,
-    /// the number of SRAMs to simulate in this part.
-    num_srams: u32,
 
     /// the partial permutation instructions for
     /// 1. sram inputs
@@ -152,12 +164,10 @@ struct FlatteningPart {
     /// bit 13: clock en inv.      bit 14: clock en set zero.
     /// bit 15: data inv.
     clken_permute: Vec<u16>,
-    /// the number of duplicate permute words
-    num_duplicate_words: u32,
 }
 
 impl FlatteningPart {
-    fn init_afters_writeouts(&mut self, part: &Partition) {
+    fn init_afters_writeouts(&mut self, aig: &AIG, part: &Partition) {
         let afters = part.stages.iter().map(|s| {
             let mut after = Vec::with_capacity(1 << BOOMERANG_NUM_STAGES);
             after.push(usize::MAX);
@@ -174,23 +184,18 @@ impl FlatteningPart {
 
         self.afters = afters;
         self.parts_after_writeouts = wos;
-    }
-
-    fn make_outputs(&mut self, aig: &AIG, part: &Partition, output_map: &mut IndexMap<usize, u32>) {
-        let pin2pos = self.parts_after_writeouts.iter().enumerate()
-            .filter_map(|(i, &pin)| {
-                if pin == usize::MAX { None }
-                else { Some((pin, i as u16)) }
-            })
-            .collect::<IndexMap<_, _>>();
+        self.num_normal_writeouts = part.stages.iter()
+            .map(|s| s.write_outs.len()).sum::<usize>() as u32;
+        self.num_srams = 0;
 
         // map: output aig pin id -> ((clken, data iv) -> pos)
         let mut comb_outputs_activations =
             IndexMap::<usize, IndexMap<usize, Option<u16>>>::new();
-
         for &endpt_i in &part.endpoints {
             match aig.get_endpoint_group(endpt_i) {
-                EndpointGroup::RAMBlock(_) => {},
+                EndpointGroup::RAMBlock(_) => {
+                    self.num_srams += 1;
+                },
                 EndpointGroup::PrimaryOutput(idx) => {
                     comb_outputs_activations.entry(idx >> 1)
                         .or_default().insert(idx & 1, None);
@@ -203,6 +208,22 @@ impl FlatteningPart {
                 },
             }
         }
+        self.num_duplicate_writeouts = ((
+            comb_outputs_activations.values()
+                .map(|v| v.len() - 1).sum::<usize>()
+                + 31) / 32) as u32;
+        self.comb_outputs_activations = comb_outputs_activations;
+
+        self.num_writeouts = self.num_normal_writeouts + self.num_srams + self.num_duplicate_writeouts;
+    }
+
+    fn make_outputs(&mut self, aig: &AIG, part: &Partition, output_map: &mut IndexMap<usize, u32>) {
+        let pin2pos = self.parts_after_writeouts.iter().enumerate()
+            .filter_map(|(i, &pin)| {
+                if pin == usize::MAX { None }
+                else { Some((pin, i as u16)) }
+            })
+            .collect::<IndexMap<_, _>>();
 
         let mut sram_duplicate_permute = vec![1u16 << 14; 1 << BOOMERANG_NUM_STAGES]; // with inv(13), set0(14)
         let mut clken_permute = vec![1u16 << 14; 1 << BOOMERANG_NUM_STAGES]; // with inv(13), set0(14), inv_data(15)
@@ -219,7 +240,7 @@ impl FlatteningPart {
         // create a duplicate pin when necessary.
         let mut get_output_with_activation = |pin_iv: usize, clken_iv: usize, clken_permute: &mut Vec<u16>, sram_duplicate_permute: &mut Vec<u16>| -> u16 {
             let (activ_idx, _, pos) =
-                comb_outputs_activations.get_mut(&(pin_iv >> 1)).unwrap()
+                self.comb_outputs_activations.get_mut(&(pin_iv >> 1)).unwrap()
                 .get_full_mut(&(clken_iv << 1 | (pin_iv & 1))).unwrap();
             if let Some(pos) = *pos {
                 return pos
@@ -231,8 +252,8 @@ impl FlatteningPart {
                 origpos
             }
             else {
+                let dup_pos = (self.num_normal_writeouts * 32 + cnt_duplicate_permute) as u16;
                 cnt_duplicate_permute += 1;
-                let dup_pos = ((1 << BOOMERANG_NUM_STAGES) - self.num_srams * 32 - cnt_duplicate_permute) as u16;
                 sram_duplicate_permute[dup_pos as usize] = origpos;
                 clken_permute[dup_pos as usize] = clken_iv_perm | (((pin_iv >> 1) as u16) << 13);
                 dup_pos
@@ -245,7 +266,7 @@ impl FlatteningPart {
         for &endpt_i in &part.endpoints {
             match aig.get_endpoint_group(endpt_i) {
                 EndpointGroup::RAMBlock(ram) => {
-                    let sram_rd_data_local_offset = NUM_THREADS_V1 - self.num_srams as usize + cur_sram_id as usize;
+                    let sram_rd_data_local_offset = self.num_writeouts as usize - self.num_srams as usize + cur_sram_id as usize;
                     let sram_rd_data_global_start = self.state_start + NUM_THREADS_V1 as u32 - self.num_srams + cur_sram_id;
                     let perm_r_en_iv = query_permute_with_pin_iv(ram.port_r_en_iv);
                     for k in 0..32 {
@@ -285,7 +306,7 @@ impl FlatteningPart {
 
         self.sram_duplicate_permute = sram_duplicate_permute;
         self.clken_permute = clken_permute;
-        self.num_duplicate_words = (cnt_duplicate_permute + 31) / 32;
+        assert_eq!((cnt_duplicate_permute + 31) / 32, self.num_duplicate_writeouts);
     }
 
     fn build_script(&self, aig: &AIG, part: &Partition, output_map: &IndexMap<usize, u32>) -> Vec<u32> {
@@ -294,10 +315,12 @@ impl FlatteningPart {
         // metadata
         script.push(part.stages.len() as u32);
         script.push(0);
+        script.push(self.num_writeouts);
         script.push(self.state_start);
         script.push(self.num_srams);
         script.push(self.sram_start);
-        script.push(self.num_duplicate_words);
+        script.push(0);   // [6]=num global read rounds, assigned later
+        script.push(self.num_duplicate_writeouts);
         // padding
         while script.len() != NUM_THREADS_V1 - 128 {
             script.push(0);
@@ -347,7 +370,7 @@ impl FlatteningPart {
         );
         let num_global_stages = rounds_idx_masks.iter()
             .map(|v| v.len()).max().unwrap() as u32;
-        script[4] = num_global_stages;
+        script[6] = num_global_stages;
         assert_eq!(script.len(), NUM_THREADS_V1);
         let global_perm_start = script.len();
         script.extend((0..(2 * num_global_stages as usize * NUM_THREADS_V1)).map(|_| 0));
@@ -465,31 +488,26 @@ fn build_flattened_script_v1(
 
     // basic index preprocessing for stages
     for i in 0..init_parts.len() {
-        flattening_parts[i].init_afters_writeouts(&init_parts[i]);
+        flattening_parts[i].init_afters_writeouts(aig, &init_parts[i]);
     }
 
     // allocate output state positions for all srams,
     // in the order of block affinity.
     let states_start = ((input_layout.len() + 31) / 32) as u32;
     let mut sum_state_start = states_start;
-    let srams_start = states_start +
-        (init_parts.len() * NUM_THREADS_V1) as u32;
+    for block in &blocks_parts {
+        for &part_id in block {
+            flattening_parts[part_id].state_start = sum_state_start;
+            sum_state_start += flattening_parts[part_id].num_writeouts;
+        }
+    }
+
+    let srams_start = sum_state_start;
     let mut sum_srams_start = srams_start;
     for block in &blocks_parts {
         for &part_id in block {
-            let cur_state_start = sum_state_start;
-            sum_state_start += NUM_THREADS_V1 as u32;
-            flattening_parts[part_id].state_start = cur_state_start;
-
-            let num_srams = init_parts[part_id].endpoints.iter().map(|i| {
-                if matches!(aig.get_endpoint_group(*i),
-                            EndpointGroup::RAMBlock(_)) { 1 }
-                else { 0 }
-            }).sum::<u32>();
-            let cur_srams_start = sum_srams_start;
-            sum_srams_start += num_srams * (1 << AIGPDK_SRAM_ADDR_WIDTH);
-            flattening_parts[part_id].sram_start = cur_srams_start;
-            flattening_parts[part_id].num_srams = num_srams;
+            flattening_parts[part_id].sram_start = sum_srams_start;
+            sum_srams_start += flattening_parts[part_id].num_srams * (1 << AIGPDK_SRAM_ADDR_WIDTH);
         }
     }
     let state_size = sum_srams_start;
@@ -551,14 +569,15 @@ fn build_flattened_script_v1(
     }
     blocks_start.push(blocks_data.len());
 
-    clilog::info!("Built script for {} blocks, state size {}, script size {}",
-                  num_blocks, state_size, blocks_data.len());
+    clilog::info!("Built script for {} blocks, state size {} (i/o: {}), script size {}",
+                  num_blocks, state_size, srams_start, blocks_data.len());
 
     FlattenedScriptV1 {
         num_blocks,
         blocks_start: blocks_start.into(),
         blocks_data: blocks_data.into(),
         state_size,
+        reg_io_state_size: srams_start,
         input_layout,
         output_map
     }
