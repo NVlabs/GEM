@@ -33,6 +33,14 @@ struct SimulatorArgs {
     input_vcd_scope: Option<String>,
     /// Output VCD path (must be writable)
     output_vcd: String,
+    /// The scope path of top module in the output VCD.
+    ///
+    /// If not specified, we will use `gem_top_module`.
+    #[clap(long)]
+    output_vcd_scope: Option<String>,
+    /// Whether to output wire states as well (for more verbose debugging)
+    #[clap(long)]
+    include_wires: bool,
 }
 
 /// Hierarchical name representation in VCD.
@@ -106,7 +114,7 @@ impl VCDHier {
 /// If succeed, returns the remaining scope (can be None itself indicating
 /// all paths matched).
 /// If fails, return None.
-pub(crate) fn match_scope_path<'i>(mut scope: &'i str, cur: &str) -> Option<&'i str> {
+fn match_scope_path<'i>(mut scope: &'i str, cur: &str) -> Option<&'i str> {
     if scope.len() == 0 { return Some("") }
     if scope.starts_with('/') {
         scope = &scope[1..];
@@ -203,6 +211,7 @@ fn main() {
         if let Some(&id) = netlistdb.pinname2id.get(
             &key as &dyn GeneralPinName
         ) {
+            if netlistdb.pindirect[id] != Direction::O { return }
             vcd2inp.insert((var.code.0, vcd_pos), id);
             inp_port_given.insert(id);
         }
@@ -306,6 +315,11 @@ fn main() {
         topo_instack[pinid] = false;
     }
     // start from all comb. circuit outputs
+    for pinid in netlistdb.cell2pin.iter_set(0) {
+        if netlistdb.pindirect[pinid] == Direction::I {
+            dfs_topo(&netlistdb, &mut topo_vis, &mut topo_instack, &mut topo, pinid);
+        }
+    }
     for cellid in 1..netlistdb.num_cells {
         if matches!(netlistdb.celltypes[cellid].as_str(),
                     "DFF" | "$__RAMGEM_SYNC_") {
@@ -323,6 +337,15 @@ fn main() {
                            netlistdb.pinnames[clk].dbg_fmt_pin());
         }
     }
+    // clilog::info!("topo size: {} / {}", topo.len(), netlistdb.num_pins);
+
+    // for i in 0..netlistdb.num_pins {
+    //     if netlistdb.pinnames[i].0.cur.as_str() == "_46841_" {
+    //         println!("pin _01039_ ({}) id {} net {}",
+    //                  netlistdb.pinnames[i].dbg_fmt_pin(), i,
+    //                  netlistdb.pin2net[i]);
+    //     }
+    // }
 
     // open out
     let write_buf = File::create(&args.output_vcd).unwrap();
@@ -331,15 +354,36 @@ fn main() {
     if let Some((ratio, unit)) = header.timescale {
         writer.timescale(ratio, unit).unwrap();
     }
-    writer.add_module("gem_top_module").unwrap();
-    let out2vcd = netlistdb.cell2pin.iter_set(0).filter_map(|i| {
+    let output_vcd_scope = args.output_vcd_scope.as_deref().unwrap_or("gem_top_module");
+    let output_vcd_scope = output_vcd_scope.split('/').collect::<Vec<_>>();
+    for &scope in &output_vcd_scope {
+        writer.add_module(scope).unwrap();
+    }
+    let mut out2vcd = netlistdb.cell2pin.iter_set(0).filter_map(|i| {
         if netlistdb.pindirect[i] == Direction::I {
             Some((i, writer.add_wire(
                 1, &format!("{}", netlistdb.pinnames[i].dbg_fmt_pin())).unwrap()))
         }
         else { None }
     }).collect::<Vec<_>>();
-    writer.upscope().unwrap();
+    if args.include_wires {
+        out2vcd.extend((0..netlistdb.num_nets).filter_map(|i| {
+            if Some(i) == netlistdb.net_zero || Some(i) == netlistdb.net_one {
+                return None
+            }
+            let root = netlistdb.net2pin.items[netlistdb.net2pin.start[i]];
+            if netlistdb.pindirect[root] != Direction::O {
+                return None
+            }
+            Some((root, writer.add_wire(
+                1, &format!("{}", netlistdb.netnames[i].1)
+            ).unwrap()))
+        }));
+    }
+    let mut last_val = vec![2; out2vcd.len()];
+    for _ in 0..output_vcd_scope.len() {
+        writer.upscope().unwrap();
+    }
     writer.enddefinitions().unwrap();
     writer.begin(SimulationCommand::Dumpvars).unwrap();
 
@@ -413,6 +457,9 @@ fn main() {
                     }
                     // propagate
                     for &pinid in &topo {
+                        // if netlistdb.pin2cell[pinid] == 0 {
+                        //     println!("trying to visit port {}", netlistdb.pinnames[pinid].dbg_fmt_pin());
+                        // }
                         if netlistdb.pindirect[pinid] == Direction::I {
                             let netid = netlistdb.pin2net[pinid];
                             if Some(netid) != netlistdb.net_zero && Some(netid) != netlistdb.net_one {
@@ -420,6 +467,9 @@ fn main() {
                                     netlistdb.net2pin.start[netid]
                                 ];
                                 circ_state[pinid] = circ_state[root];
+                                // if netlistdb.pin2cell[pinid] == 0 {
+                                //     println!("changing output for pin {} to {}", netlistdb.pinnames[pinid].dbg_fmt_pin(), circ_state[pinid]);
+                                // }
                             }
                         }
                         else {
@@ -436,7 +486,7 @@ fn main() {
                             }
                             circ_state[pinid] = match netlistdb.celltypes[cellid].as_str() {
                                 "AND2_00_0" => vala & valb,
-                                "AND2_01_0" => vala & (valb) ^ 1,
+                                "AND2_01_0" => vala & (valb ^ 1),
                                 "AND2_10_0" => (vala ^ 1) & valb,
                                 "AND2_11_0" => (vala | valb) ^ 1,
                                 "AND2_11_1" => vala | valb,
@@ -444,17 +494,25 @@ fn main() {
                                 "BUF" => vala,
                                 _ => unreachable!()
                             };
+                            // if netlistdb.pin2net[pinid] == 1039 {
+                            //     println!("d_we_o input gate: {} {} type {}", vala, valb, netlistdb.celltypes[cellid].as_str());
+                            // }
                         }
                     }
-                }
-                // write vcd vars out
-                writer.timestamp(vcd_time).unwrap();
-                for &(pinid, vid) in &out2vcd {
-                    use vcd_ng::Value;
-                    writer.change_scalar(vid, match circ_state[pinid] {
-                        1 => Value::V1,
-                        _ => Value::V0
-                    }).unwrap();
+                    // write vcd vars out
+                    writer.timestamp(vcd_time).unwrap();
+                    for (i, &(pinid, vid)) in out2vcd.iter().enumerate() {
+                        use vcd_ng::Value;
+                        let value_new = circ_state[pinid];
+                        if value_new == last_val[i] {
+                            continue
+                        }
+                        last_val[i] = value_new;
+                        writer.change_scalar(vid, match value_new {
+                            1 => Value::V1,
+                            _ => Value::V0
+                        }).unwrap();
+                    }
                 }
                 // reset for next timestamp
                 vcd_time = t;
@@ -464,11 +522,11 @@ fn main() {
                 }
             },
             FastFlowToken::Value(FFValueChange { id, bits }) => {
-                for (pos, b) in bits.iter().enumerate() {
+                for (pos, &b) in bits.iter().enumerate() {
                     if let Some(&pin) = vcd2inp.get(
                         &(id.0, pos)
                     ) {
-                        if posedge_monitor.contains(&pin) {
+                        if b == b'1' && posedge_monitor.contains(&pin) {
                             last_vcd_time_rising_edge = true;
                         }
                         circ_state[pin] = match b {
