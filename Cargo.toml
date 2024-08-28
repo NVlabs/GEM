@@ -2,6 +2,7 @@
 name = "gem"
 version = "0.1.0"
 edition = "2021"
+links = "gem"
 
 [dependencies]
 cachedhash = "0.2.0"
@@ -17,10 +18,15 @@ rayon = "1.10.0"
 serde = { version = "1.0.208", features = ["derive"] }
 serde_bare = "0.5.0"
 sverilogparse = { version = "0.4.2", registry = "zzdeps" }
-ulib = { version = "0.3.13", registry = "zzdeps" }
+ulib = { version = "0.3.13", registry = "zzdeps", features = ["cuda"] }
 vcd-ng = "0.1.2"
 
+[build-dependencies]
+ucc = { version = "0.2.5", registry = "zzdeps" }
+
 [patch.zzdeps]
+ucc = { path = "../ucc" }
+ulib = { path = "../ulib" }
 netlistdb = { path = "../netlistdb" }
 sverilogparse = { path = "../sverilogparse" }
 

@@ -577,7 +577,7 @@ fn build_flattened_script_v1(
     }
 
     // build script per part. we will later assemble them to blocks.
-    let mut parts_data_split = vec![vec![]; num_blocks];
+    let mut parts_data_split = vec![vec![]; init_parts.len()];
     for part_id in 0..init_parts.len() {
         clilog::debug!("building script for part {}", part_id);
         parts_data_split[part_id] = flattening_parts[part_id].build_script(
