@@ -25,15 +25,9 @@ __device__ void simulate_block_v1(
   u32 *__restrict__ sram_data,
   u32 *__restrict__ shared_metadata,
   u32 *__restrict__ shared_writeouts,
-  u32 *__restrict__ shared_state,
-  bool debug_verbose
+  u32 *__restrict__ shared_state
   )
 {
-  // sram_data[threadIdx.x] = 0;
-  // shared_metadata[threadIdx.x] = 0;
-  // shared_writeouts[threadIdx.x] = 0;
-  // shared_state[threadIdx.x] = 0;
-  // __syncthreads();
   int script_pi = 0;
   while(true) {
     shared_metadata[threadIdx.x] = script[script_pi + threadIdx.x];
@@ -67,10 +61,6 @@ __device__ void simulate_block_v1(
       u32 mask = idx_mask.c2;
       if(mask) {
         u32 value = input_state[idx];
-        if(debug_verbose && threadIdx.x == 11) {
-          printf(" => pos 11 reading global stage %d idx %u mask %u value %u\n",
-                 gr_i, idx, mask, value);
-        }
         while(mask) {
           t_global_rd_state <<= 1;
           u32 lowbit = mask & -mask;
@@ -82,16 +72,6 @@ __device__ void simulate_block_v1(
     }
     shared_state[threadIdx.x] = t_global_rd_state;
     __syncthreads();
-    if(debug_verbose) {
-      if(threadIdx.x == 0) {
-        printf("debug_verbose STAGE 0 block %d\n", blockIdx.x);
-        printf("global read states:\n");
-        for(int i = 0; i < 256; ++i) {
-          printf(" [%d] = %u\n", i, shared_state[i]);
-        }
-      }
-      __syncthreads();
-    }
 
     for(int bs_i = 0; bs_i < num_stages; ++bs_i) {
       u32 hier_input = 0, hier_flag_xora = 0, hier_flag_xorb = 0, hier_flag_orb = 0;
@@ -127,17 +107,6 @@ __device__ void simulate_block_v1(
       shared_state[threadIdx.x] = hier_input;
       __syncthreads();
 
-      if(debug_verbose) {
-        if(threadIdx.x == 0) {
-          printf("debug_verbose STAGE 1.1 block %d bs_i %d\n", blockIdx.x, bs_i);
-          printf("after local shuffle:\n");
-          for(int i = 0; i < 256; ++i) {
-            printf(" [%d] = %u\n", i, shared_state[i]);
-          }
-        }
-        __syncthreads();
-      }
-
       // hier[0]
       if(threadIdx.x >= 128) {
         u32 hier_input_a = shared_state[threadIdx.x - 128];
@@ -170,17 +139,6 @@ __device__ void simulate_block_v1(
         shared_state[0] = r8 | r9 | r10 | r11 | r12;
       }
       __syncthreads();
-
-      if(debug_verbose) {
-        if(threadIdx.x == 0) {
-          printf("debug_verbose STAGE 1.2 block %d bs_i %d\n", blockIdx.x, bs_i);
-          printf("after and-invert:\n");
-          for(int i = 0; i < 256; ++i) {
-            printf(" [%d] = %u\n", i, shared_state[i]);
-          }
-        }
-        __syncthreads();
-      }
 
       // write out
       if((writeout_hook_i >> 8) == bs_i) {
@@ -247,17 +205,6 @@ __device__ void simulate_block_v1(
     }
     __syncthreads();
 
-    if(debug_verbose) {
-      if(threadIdx.x == 0) {
-        printf("debug_verbose STAGE 2 block %d\n", blockIdx.x);
-        printf("before writeout_inv:\n");
-        for(int i = 0; i < 256; ++i) {
-          printf(" [%d] = %u\n", i, shared_writeouts[i]);
-        }
-      }
-      __syncthreads();
-    }
-
     // clock enable permutation
     u32 clken_perm = 0;
     u32 writeout_inv = shared_writeouts[threadIdx.x];
@@ -300,18 +247,6 @@ __device__ void simulate_block_v1(
       output_state[io_offset + threadIdx.x] = wo;
     }
 
-    if(debug_verbose) {
-      __syncthreads();
-      if(threadIdx.x == 0) {
-        printf("debug_verbose STAGE 3 block %d\n", blockIdx.x);
-        printf("final writeout:\n");
-        for(int i = 0; i < num_ios; ++i) {
-          printf(" [%d] [global %d] = %u\n", i, io_offset + i, output_state[io_offset + i]);
-        }
-      }
-      __syncthreads();
-    }
-
     if(is_last_part) break;
   }
   assert(script_size == script_pi);
@@ -341,8 +276,7 @@ __global__ void __maxnreg__(128) simulate_v1_noninteractive_simple_scan(
       states_noninteractive + cycle_i * state_size,
       states_noninteractive + (cycle_i + 1) * state_size,
       sram_data,
-      shared_metadata, shared_writeouts, shared_state,
-      cycle_i == 499 || cycle_i == 500 /* debug_verbose */
+      shared_metadata, shared_writeouts, shared_state
       );
     cooperative_groups::this_grid().sync();
   }

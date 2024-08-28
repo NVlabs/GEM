@@ -47,6 +47,9 @@ struct SimulatorArgs {
     ///
     /// should not exceed GPU maximum simutaneous occupancy.
     num_blocks: usize,
+    /// Whether to run a sanity check against CPU baseline on finish.
+    #[clap(long)]
+    check_with_cpu: bool,
 }
 
 /// Hierarchical name representation in VCD.
@@ -181,7 +184,6 @@ fn simulate_block_v1(
             script_pi += 256;
             break
         }
-        println!("part start");
         // assert_eq!(part.stages.len(), num_stages as usize);
         // assert_eq!(part.stages.iter().map(|s| s.write_outs.len()).sum::<usize>(), (num_ios - num_srams - num_output_duplicates) as usize);
         script_pi += 256;
@@ -414,8 +416,6 @@ fn simulate_block_v1(
                 println!(" [{}] [global {}] = {}", i, io_offset + i, output_state[(io_offset + i) as usize]);
             }
         }
-
-        println!("part complete");
 
         if is_last_part != 0 {
             break
@@ -653,28 +653,33 @@ fn main() {
     clilog::finish!(timer_sim);
 
     // sanity check.
-    let mut sram_storage_sanity = vec![0; script.sram_storage_size as usize * AIGPDK_SRAM_SIZE];
-    let mut input_states_sanity = input_states.clone();
-    for i in 0..offsets_timestamps.len() {
-        let mut output_state = vec![0; script.reg_io_state_size as usize];
-        output_state.copy_from_slice(&input_states_sanity[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)]);
-        for block_i in 0..script.num_blocks {
-            simulate_block_v1(
-                &script.blocks_data[script.blocks_start[block_i]..script.blocks_start[block_i + 1]],
-                &input_states_sanity[(i * script.reg_io_state_size as usize)..((i + 1) * script.reg_io_state_size as usize)],
-                &mut output_state,
-                &mut sram_storage_sanity,
-                i == 499 || i == 500
-            );
+    if args.check_with_cpu {
+        let mut sram_storage_sanity = vec![0; script.sram_storage_size as usize * AIGPDK_SRAM_SIZE];
+        let mut input_states_sanity = input_states.clone();
+        clilog::info!("running sanity test");
+        for i in 0..offsets_timestamps.len() {
+            let mut output_state = vec![0; script.reg_io_state_size as usize];
+            output_state.copy_from_slice(&input_states_sanity[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)]);
+            for block_i in 0..script.num_blocks {
+                simulate_block_v1(
+                    &script.blocks_data[script.blocks_start[block_i]..script.blocks_start[block_i + 1]],
+                    &input_states_sanity[(i * script.reg_io_state_size as usize)..((i + 1) * script.reg_io_state_size as usize)],
+                    &mut output_state,
+                    &mut sram_storage_sanity,
+                    false
+                );
+            }
+            input_states_sanity[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)].copy_from_slice(&output_state);
+            if output_state != input_states_uvec[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)] {
+                println!("sanity check fail at cycle {i}.\ncpu good: {:?}\ngpu bad: {:?}", output_state, &input_states_uvec[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)]);
+                panic!()
+            }
         }
-        input_states_sanity[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)].copy_from_slice(&output_state);
-        if output_state != input_states_uvec[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)] {
-            println!("sanity check fail at cycle {i}.\ncpu good: {:?}\ngpu bad: {:?}", output_state, &input_states_uvec[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)]);
-            panic!()
-        }
+        clilog::info!("sanity test passed!");
     }
 
     // output...
+    clilog::info!("write out vcd");
     let mut last_val = vec![2; out2vcd.len()];
     for &(offset, timestamp) in &offsets_timestamps {
         writer.timestamp(timestamp).unwrap();
