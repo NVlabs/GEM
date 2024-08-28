@@ -5,7 +5,7 @@ use std::hash::Hash;
 use std::rc::Rc;
 use std::collections::{HashMap, HashSet};
 use compact_str::CompactString;
-use netlistdb::{Direction, GeneralPinName, NetlistDB};
+use netlistdb::{Direction, GeneralHierName, GeneralPinName, NetlistDB};
 use sverilogparse::SVerilogRange;
 use itertools::Itertools;
 use vcd_ng::{Parser, ScopeItem, Var, Scope, FastFlow, FastFlowToken, FFValueChange, Writer, SimulationCommand};
@@ -376,7 +376,7 @@ fn main() {
                 return None
             }
             Some((root, writer.add_wire(
-                1, &format!("{}", netlistdb.netnames[i].1)
+                1, &format!("{}", netlistdb.netnames[i].dbg_fmt_pin())
             ).unwrap()))
         }));
     }
@@ -438,6 +438,9 @@ fn main() {
                             let port_w_old_data = sram[port_w_addr];
                             let port_w_data = (port_w_old_data & (!port_w_wr_en)) | (port_w_wr_data & port_w_wr_en);
                             sram[port_w_addr] = port_w_data;
+                            if netlistdb.cellnames[cellid].dbg_fmt_hier().as_str() == "cpu.instruction_unit.icache.memories[0].way_0_data_ram.mem.0.0" {
+                                println!("our sram at time {vcd_time} port_r_addr {port_r_addr} port_w_addr {port_w_addr} port_w_wr_data {port_w_wr_data} -> port_r_rd_data {port_r_rd_data}");
+                            }
                             for pinid in netlistdb.cell2pin.iter_set(cellid) {
                                 macro_rules! save_var {
                                     ($($pin_name:literal <= $var_name:ident),+) => {

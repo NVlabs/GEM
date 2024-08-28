@@ -17,6 +17,8 @@ pub struct AIGPDKLeafPins();
 /// project as well as the definitions in PDK libraries.
 pub const AIGPDK_SRAM_ADDR_WIDTH: usize = 13;
 
+pub const AIGPDK_SRAM_SIZE: usize = 1 << 13;
+
 impl LeafPinProvider for AIGPDKLeafPins {
     fn direction_of(
         &self,
