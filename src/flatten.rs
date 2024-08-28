@@ -392,8 +392,8 @@ impl FlatteningPart {
         script.extend((0..(2 * num_global_stages as usize * NUM_THREADS_V1)).map(|_| 0));
         for (i, v) in rounds_idx_masks.iter().enumerate() {
             for (round, &(idx, mask)) in v.iter().enumerate() {
-                script[global_perm_start + NUM_THREADS_V1 * 2 * round + i] = idx;
-                script[global_perm_start + NUM_THREADS_V1 * (2 * round + 1) + i] = mask;
+                script[global_perm_start + NUM_THREADS_V1 * 2 * round + (i * 2)] = idx;
+                script[global_perm_start + NUM_THREADS_V1 * 2 * round + (i * 2 + 1)] = mask;
                 // println!("test: round {} i {} idx {} mask {}",
                 //          round, i, idx, mask);
             }
@@ -457,10 +457,16 @@ impl FlatteningPart {
                 }
             }
 
-            for k in 0..16 {
-                for i in ((k * 2)..bs_perm.len()).step_by(32) {
+            for k in 0..4 {
+                for i in ((k * 8)..bs_perm.len()).step_by(32) {
                     script.push(((bs_perm[i] as u32)) |
                                 (bs_perm[i + 1] as u32) << 16);
+                    script.push(((bs_perm[i + 2] as u32)) |
+                                (bs_perm[i + 3] as u32) << 16);
+                    script.push(((bs_perm[i + 4] as u32)) |
+                                (bs_perm[i + 5] as u32) << 16);
+                    script.push(((bs_perm[i + 6] as u32)) |
+                                (bs_perm[i + 7] as u32) << 16);
                 }
             }
 
@@ -471,17 +477,29 @@ impl FlatteningPart {
         }
 
         // sram worker
-        for k in 0..16 {
-            for i in ((k * 2)..self.sram_duplicate_permute.len()).step_by(32) {
+        for k in 0..4 {
+            for i in ((k * 8)..self.sram_duplicate_permute.len()).step_by(32) {
                 script.push(((self.sram_duplicate_permute[i] as u32)) |
                             (self.sram_duplicate_permute[i + 1] as u32) << 16);
+                script.push(((self.sram_duplicate_permute[i + 2] as u32)) |
+                            (self.sram_duplicate_permute[i + 3] as u32) << 16);
+                script.push(((self.sram_duplicate_permute[i + 4] as u32)) |
+                            (self.sram_duplicate_permute[i + 5] as u32) << 16);
+                script.push(((self.sram_duplicate_permute[i + 6] as u32)) |
+                            (self.sram_duplicate_permute[i + 7] as u32) << 16);
             }
         }
         // clock enable signal
-        for k in 0..16 {
-            for i in ((k * 2)..self.clken_permute.len()).step_by(32) {
+        for k in 0..4 {
+            for i in ((k * 8)..self.clken_permute.len()).step_by(32) {
                 script.push(((self.clken_permute[i] as u32)) |
                             (self.clken_permute[i + 1] as u32) << 16);
+                script.push(((self.clken_permute[i + 2] as u32)) |
+                            (self.clken_permute[i + 3] as u32) << 16);
+                script.push(((self.clken_permute[i + 4] as u32)) |
+                            (self.clken_permute[i + 5] as u32) << 16);
+                script.push(((self.clken_permute[i + 6] as u32)) |
+                            (self.clken_permute[i + 7] as u32) << 16);
             }
         }
 

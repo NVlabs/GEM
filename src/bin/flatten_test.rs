@@ -93,8 +93,8 @@ fn simulate_block_v1(
         for _gr_i in 0..num_global_read_rounds {
             for i in 0..256 {
                 let mut cur_state = state[i];
-                let idx = script[script_pi + i];
-                let mut mask = script[script_pi + 256 + i];
+                let idx = script[script_pi + (i * 2)];
+                let mut mask = script[script_pi + (i * 2 + 1)];
                 if mask == 0 { continue }
                 let value = input_state[idx as usize];
                 while mask != 0 {
@@ -115,23 +115,26 @@ fn simulate_block_v1(
             let mut hier_flag_xora = vec![0; 256];
             let mut hier_flag_xorb = vec![0; 256];
             let mut hier_flag_orb = vec![0; 256];
-            for k in 0..16 {
+            for k_outer in 0..4 {
                 for i in 0..256 {
-                    let t_shuffle = script[script_pi + i];
-                    let t_shuffle_1 = (t_shuffle & ((1 << 16) - 1)) as u16;
-                    let t_shuffle_1_idx = t_shuffle_1 & ((1 << 13) - 1);
-                    let t_shuffle_2 = (t_shuffle >> 16) as u16;
-                    let t_shuffle_2_idx = t_shuffle_2 & ((1 << 13) - 1);
-                    hier_inputs[i] |= (state[(t_shuffle_1_idx >> 5) as usize] >> (t_shuffle_1_idx & 31) & 1) << (k * 2);
-                    hier_inputs[i] |= (state[(t_shuffle_2_idx >> 5) as usize] >> (t_shuffle_2_idx & 31) & 1) << (k * 2 + 1);
-                    hier_flag_xora[i] |= ((t_shuffle_1 >> 14 & 1) as u32) << (k * 2);
-                    hier_flag_xora[i] |= ((t_shuffle_2 >> 14 & 1) as u32) << (k * 2 + 1);
-                    hier_flag_xorb[i] |= ((t_shuffle_1 >> 13 & 1) as u32) << (k * 2);
-                    hier_flag_xorb[i] |= ((t_shuffle_2 >> 13 & 1) as u32) << (k * 2 + 1);
-                    hier_flag_orb[i] |= ((t_shuffle_1 >> 15) as u32) << (k * 2);
-                    hier_flag_orb[i] |= ((t_shuffle_2 >> 15) as u32) << (k * 2 + 1);
+                    for k_inner in 0..4 {
+                        let k = k_outer * 4 + k_inner;
+                        let t_shuffle = script[script_pi + i * 4 + k_inner];
+                        let t_shuffle_1 = (t_shuffle & ((1 << 16) - 1)) as u16;
+                        let t_shuffle_1_idx = t_shuffle_1 & ((1 << 13) - 1);
+                        let t_shuffle_2 = (t_shuffle >> 16) as u16;
+                        let t_shuffle_2_idx = t_shuffle_2 & ((1 << 13) - 1);
+                        hier_inputs[i] |= (state[(t_shuffle_1_idx >> 5) as usize] >> (t_shuffle_1_idx & 31) & 1) << (k * 2);
+                        hier_inputs[i] |= (state[(t_shuffle_2_idx >> 5) as usize] >> (t_shuffle_2_idx & 31) & 1) << (k * 2 + 1);
+                        hier_flag_xora[i] |= ((t_shuffle_1 >> 14 & 1) as u32) << (k * 2);
+                        hier_flag_xora[i] |= ((t_shuffle_2 >> 14 & 1) as u32) << (k * 2 + 1);
+                        hier_flag_xorb[i] |= ((t_shuffle_1 >> 13 & 1) as u32) << (k * 2);
+                        hier_flag_xorb[i] |= ((t_shuffle_2 >> 13 & 1) as u32) << (k * 2 + 1);
+                        hier_flag_orb[i] |= ((t_shuffle_1 >> 15) as u32) << (k * 2);
+                        hier_flag_orb[i] |= ((t_shuffle_2 >> 15) as u32) << (k * 2 + 1);
+                    }
                 }
-                script_pi += 256;
+                script_pi += 256 * 4;
             }
             // [debug] hier[0] writeout
             for (i, &aigpin) in part.stages[bs_i as usize].hier[0].iter().enumerate() {
@@ -201,23 +204,26 @@ fn simulate_block_v1(
         }
 
         let mut sram_duplicate_perm = vec![0u32; (num_srams * 4 + num_output_duplicates) as usize];
-        for k in 0..16 {
+        for k_outer in 0..4 {
             for i in 0..(num_srams * 4 + num_output_duplicates) {
-                let t_shuffle = script[script_pi + i as usize];
-                let t_shuffle_1 = (t_shuffle & ((1 << 16) - 1)) as u32;
-                let t_shuffle_1_idx = t_shuffle_1 & ((1 << 13) - 1);
-                let t_shuffle_2 = (t_shuffle >> 16) as u32;
-                let t_shuffle_2_idx = t_shuffle_2 & ((1 << 13) - 1);
-                sram_duplicate_perm[i as usize] |= (
-                    ((writeouts[(t_shuffle_1_idx >> 5) as usize] >> (t_shuffle_1_idx & 31) & 1)
-                     & !(t_shuffle_1 >> 14)) ^ (t_shuffle_1 >> 13 & 1)
-                ) << (k * 2);
-                sram_duplicate_perm[i as usize] |= (
-                    ((writeouts[(t_shuffle_2_idx >> 5) as usize] >> (t_shuffle_2_idx & 31) & 1)
-                     & !(t_shuffle_2 >> 14)) ^ (t_shuffle_2 >> 13 & 1)
-                ) << (k * 2 + 1);
+                for k_inner in 0..4 {
+                    let k = k_outer * 4 + k_inner;
+                    let t_shuffle = script[script_pi + (i * 4 + k_inner) as usize];
+                    let t_shuffle_1 = (t_shuffle & ((1 << 16) - 1)) as u32;
+                    let t_shuffle_1_idx = t_shuffle_1 & ((1 << 13) - 1);
+                    let t_shuffle_2 = (t_shuffle >> 16) as u32;
+                    let t_shuffle_2_idx = t_shuffle_2 & ((1 << 13) - 1);
+                    sram_duplicate_perm[i as usize] |= (
+                        ((writeouts[(t_shuffle_1_idx >> 5) as usize] >> (t_shuffle_1_idx & 31) & 1)
+                         & !(t_shuffle_1 >> 14)) ^ (t_shuffle_1 >> 13 & 1)
+                    ) << (k * 2);
+                    sram_duplicate_perm[i as usize] |= (
+                        ((writeouts[(t_shuffle_2_idx >> 5) as usize] >> (t_shuffle_2_idx & 31) & 1)
+                         & !(t_shuffle_2 >> 14)) ^ (t_shuffle_2 >> 13 & 1)
+                    ) << (k * 2 + 1);
+                }
             }
-            script_pi += 256;
+            script_pi += 256 * 4;
         }
 
         for sram_i_u32 in 0..num_srams {
@@ -245,25 +251,28 @@ fn simulate_block_v1(
 
         let mut clken_perm = vec![0u32; num_ios as usize];
         let writeouts_for_clken = writeouts.clone();
-        for k in 0..16 {
+        for k_outer in 0..4 {
             for i in 0..num_ios {
-                let t_shuffle = script[script_pi + i as usize];
-                let t_shuffle_1 = (t_shuffle & ((1 << 16) - 1)) as u32;
-                let t_shuffle_1_idx = t_shuffle_1 & ((1 << 13) - 1);
-                let t_shuffle_2 = (t_shuffle >> 16) as u32;
-                let t_shuffle_2_idx = t_shuffle_2 & ((1 << 13) - 1);
-                clken_perm[i as usize] |= (
-                    ((writeouts_for_clken[(t_shuffle_1_idx >> 5) as usize] >> (t_shuffle_1_idx & 31) & 1)
-                     & !(t_shuffle_1 >> 14)) ^ (t_shuffle_1 >> 13 & 1)
-                ) << (k * 2);
-                clken_perm[i as usize] |= (
-                    ((writeouts_for_clken[(t_shuffle_2_idx >> 5) as usize] >> (t_shuffle_2_idx & 31) & 1)
-                     & !(t_shuffle_2 >> 14)) ^ (t_shuffle_2 >> 13 & 1)
-                ) << (k * 2 + 1);
-                writeouts[i as usize] ^= (t_shuffle_1 >> 15) << (k * 2);
-                writeouts[i as usize] ^= (t_shuffle_2 >> 15) << (k * 2 + 1);
+                for k_inner in 0..4 {
+                    let k = k_outer * 4 + k_inner;
+                    let t_shuffle = script[script_pi + (i * 4 + k_inner) as usize];
+                    let t_shuffle_1 = (t_shuffle & ((1 << 16) - 1)) as u32;
+                    let t_shuffle_1_idx = t_shuffle_1 & ((1 << 13) - 1);
+                    let t_shuffle_2 = (t_shuffle >> 16) as u32;
+                    let t_shuffle_2_idx = t_shuffle_2 & ((1 << 13) - 1);
+                    clken_perm[i as usize] |= (
+                        ((writeouts_for_clken[(t_shuffle_1_idx >> 5) as usize] >> (t_shuffle_1_idx & 31) & 1)
+                         & !(t_shuffle_1 >> 14)) ^ (t_shuffle_1 >> 13 & 1)
+                    ) << (k * 2);
+                    clken_perm[i as usize] |= (
+                        ((writeouts_for_clken[(t_shuffle_2_idx >> 5) as usize] >> (t_shuffle_2_idx & 31) & 1)
+                         & !(t_shuffle_2 >> 14)) ^ (t_shuffle_2 >> 13 & 1)
+                    ) << (k * 2 + 1);
+                    writeouts[i as usize] ^= (t_shuffle_1 >> 15) << (k * 2);
+                    writeouts[i as usize] ^= (t_shuffle_2 >> 15) << (k * 2 + 1);
+                }
             }
-            script_pi += 256;
+            script_pi += 256 * 4;
         }
         // println!("test: clken_perm {:?}", clken_perm);
 
