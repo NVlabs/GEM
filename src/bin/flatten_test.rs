@@ -106,9 +106,6 @@ fn simulate_block_v1(
                     mask ^= lowbit;
                 }
                 state[i] = cur_state;
-                // if i == 0 {
-                //     println!("read global at 0 round {_gr_i} result {cur_state:032b}");
-                // }
             }
             script_pi += 256 * 2;
         }
@@ -133,23 +130,13 @@ fn simulate_block_v1(
                     hier_flag_xorb[i] |= ((t_shuffle_2 >> 13 & 1) as u32) << (k * 2 + 1);
                     hier_flag_orb[i] |= ((t_shuffle_1 >> 15) as u32) << (k * 2);
                     hier_flag_orb[i] |= ((t_shuffle_2 >> 15) as u32) << (k * 2 + 1);
-                    // if parts_indices[part_i_dbg - 1] == 2 && bs_i == 3 && i * 32 + k * 2 + 1 == 5467 {
-                    //     println!("when shuffling to get 5467 (_06733_), we use t_shuffle_2 {:016b} (index {}) and get {}", t_shuffle_2, t_shuffle_2_idx, state[(t_shuffle_2_idx >> 5) as usize] >> (t_shuffle_2_idx & 31) & 1);
-                    // }
                 }
                 script_pi += 256;
             }
             // [debug] hier[0] writeout
             for (i, &aigpin) in part.stages[bs_i as usize].hier[0].iter().enumerate() {
                 if aigpin == usize::MAX { continue }
-                // if aigpin == (274 >> 1) {
-                //     let value = (hier_inputs[i >> 5] >> (i & 31) & 1) as u8;
-                //     println!("TEST: part_i_dbg {part_i_dbg}, bs_i {bs_i}, i {i} value {value}");
-                // }
                 aigpin_values[aigpin] = (hier_inputs[i >> 5] >> (i & 31) & 1) as u8;
-                // if aigpin == (22536 >> 1) {
-                //     println!("test _06733_ assigned at part {} (id {}) bs_i {bs_i} input position {i}", part_i_dbg - 1, parts_indices[part_i_dbg - 1]);
-                // }
             }
             // hier[0]
             for i in 0..128 {
@@ -159,13 +146,6 @@ fn simulate_block_v1(
                 let xorb = hier_flag_xorb[128 + i];
                 let orb = hier_flag_orb[128 + i];
                 let ret = (a ^ xora) & ((b ^ xorb) | orb);
-                // if 128 + i == 169 {
-                //     println!("state 169 (bs_i: {bs_i}) hier_inputs got {:032b}, real hiers should be {:?}", ret, &part.stages[bs_i as usize].hier[1][i * 32..(i + 1) * 32]);
-                //     if part.stages[bs_i as usize].hier[1][i * 32] == 1 {
-                //         println!("debug for clkinput: a {a:032b}, b {b:032b} xora {xora:032b} xorb {xorb:032b} orb {orb:032b}");
-                //         println!("debug for clkinput: a hier {:?}, b hier {:?}", &part.stages[bs_i as usize].hier[0][i * 32..(i + 1) * 32], &part.stages[bs_i as usize].hier[0][(i + 128) * 32..(i + 128 + 1) * 32]);
-                //     }
-                // }
                 hier_inputs[128 + i] = ret;
             }
             // hier 1 to 7
@@ -216,12 +196,6 @@ fn simulate_block_v1(
                 let hooki = writeout_hooks[i];
                 if (hooki >> 8) as u32 == bs_i {
                     writeouts[i] = state[(hooki & 255) as usize];
-                    // if i == 0 {
-                    //     println!("writing out slot 0 with state {} value {}", hooki & 255, writeouts[i]);
-                    //     if (writeouts[i] & 1) == 0 {
-                    //         println!("unexpected! should be 1 as this is supposed to be the clock pin");
-                    //     }
-                    // }
                 }
             }
         }
@@ -288,13 +262,6 @@ fn simulate_block_v1(
                 ) << (k * 2 + 1);
                 writeouts[i as usize] ^= (t_shuffle_1 >> 15) << (k * 2);
                 writeouts[i as usize] ^= (t_shuffle_2 >> 15) << (k * 2 + 1);
-
-                // if (i * 32 + k * 2) == 142 && parts_indices[part_i_dbg - 1] == 1 {
-                //     println!("Before writeout for branch m: toggle = {}, written {}, PERM is actually {:032b}, k {k} i {i}", t_shuffle_1 >> 15, writeouts[i as usize] >> (k * 2) & 1, t_shuffle_1);
-                // }
-                // if k == 0 {
-                //     println!("test clken_perm [0] io {i} t_shuffle_1 {t_shuffle_1:016b} result {} writeout {}", clken_perm[i as usize] >> (k * 2) & 1, writeouts[i as usize] >> (k * 2) & 1);
-                // }
             }
             script_pi += 256;
         }
@@ -305,9 +272,6 @@ fn simulate_block_v1(
             let clken = clken_perm[i as usize];
             let wo = (old_wo & !clken) | (writeouts[i as usize] & clken);
             output_state[(io_offset + i) as usize] = wo;
-            // if ((old_wo | writeouts[i as usize]) & !clken) != 0 {
-            //     panic!("block(?) part(?) io {} clken {:032b} old_wo {:032b} new_wo {:032b}", i, clken, old_wo, writeouts[i as usize]);
-            // }
         }
         println!("part complete");
 
@@ -558,8 +522,6 @@ fn main() {
         }));
     }
 
-    println!("output_map[72] = {}", script.output_map.get(&72).unwrap());
-
     let mut last_val = vec![2; out2vcd.len()];
     for _ in 0..output_vcd_scope.len() {
         writer.upscope().unwrap();
@@ -699,7 +661,6 @@ fn main() {
                                 last_vcd_time_active = true;
                                 let p = *script.input_map.get(&pe).unwrap();
                                 state[p as usize >> 5] |= 1 << (p & 31);
-                                // println!("setting clk rising en at pos {p}");
                             }
                             if ne != usize::MAX && old_value == 1 {
                                 last_vcd_time_active = true;
