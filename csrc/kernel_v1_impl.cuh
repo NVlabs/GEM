@@ -176,34 +176,34 @@ __device__ void simulate_block_v1(
     sram_duplicate_t = (sram_duplicate_t & ~t_srdup_flag.c2) ^ t_srdup_flag.c1;
     script_pi += 256 * 2;
 
+    // sram read fires here.
+    u32 *ram = nullptr;
+    u32 r, w0;
+    u32 port_w_addr_iv, port_w_wr_en, port_w_wr_data_iv;
     if(threadIdx.x < num_srams * 4) {
       u32 addrs = sram_duplicate_t;
       u32 last_tid = 32 + threadIdx.x / 32 * 32;
       u32 mask = (last_tid <= num_srams * 4)
         ? 0xffffffff : (0xffffffff >> (last_tid - num_srams * 4));
-      u32 port_w_wr_en = __shfl_down_sync(mask, sram_duplicate_t, 1);
-      u32 port_w_wr_data_iv = __shfl_down_sync(mask, sram_duplicate_t, 2);
+      port_w_wr_en = __shfl_down_sync(mask, sram_duplicate_t, 1);
+      port_w_wr_data_iv = __shfl_down_sync(mask, sram_duplicate_t, 2);
+
       if(threadIdx.x % 4 == 0) {
         u32 sram_i = threadIdx.x / 4;
         u32 sram_st = sram_offset + sram_i * (1 << 13);
         // u32 sram_ed = sram_st + (1 << 13);
         u32 port_r_addr_iv = addrs & 0xffff;
-        u32 port_w_addr_iv = addrs >> 16;
+        port_w_addr_iv = addrs >> 16;
 
-        u32 *ram = sram_data + sram_st;
-        u32 r = ram[port_r_addr_iv], w0 = ram[port_w_addr_iv];
-        shared_writeouts[num_ios - num_srams + sram_i] = r;
-        ram[port_w_addr_iv] = (w0 & ~port_w_wr_en) | (port_w_wr_data_iv & port_w_wr_en);
+        ram = sram_data + sram_st;
+        r = ram[port_r_addr_iv];
+        w0 = ram[port_w_addr_iv];
       }
     }
-    else if(threadIdx.x < num_srams * 4 + num_output_duplicates) {
-      shared_writeouts[num_ios - num_srams - num_output_duplicates + (threadIdx.x - num_srams * 4)] = sram_duplicate_t;
-    }
-    __syncthreads();
+    // __syncthreads();
 
     // clock enable permutation
     u32 clken_perm = 0;
-    u32 writeout_inv = shared_writeouts[threadIdx.x];
     for(int k_outer = 0; k_outer < 4; ++k_outer) {
       VectorRead4 t_sf;
       t_sf.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
@@ -230,6 +230,22 @@ __device__ void simulate_block_v1(
     }
     VectorRead4 t_clk_wo_flag;
     t_clk_wo_flag.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
+
+    // sram commit
+    if(threadIdx.x < num_srams * 4) {
+      if(threadIdx.x % 4 == 0) {
+        u32 sram_i = threadIdx.x / 4;
+        shared_writeouts[num_ios - num_srams + sram_i] = r;
+        ram[port_w_addr_iv] = (w0 & ~port_w_wr_en) | (port_w_wr_data_iv & port_w_wr_en);
+      }
+    }
+    else if(threadIdx.x < num_srams * 4 + num_output_duplicates) {
+      shared_writeouts[num_ios - num_srams - num_output_duplicates + (threadIdx.x - num_srams * 4)] = sram_duplicate_t;
+    }
+
+    __syncthreads();
+    u32 writeout_inv = shared_writeouts[threadIdx.x];
+
     script_pi += 256 * 4;
     clken_perm = (clken_perm & ~t_clk_wo_flag.c2) ^ t_clk_wo_flag.c1;
     writeout_inv ^= t_clk_wo_flag.c3;
