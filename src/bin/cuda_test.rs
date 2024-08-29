@@ -50,6 +50,9 @@ struct SimulatorArgs {
     /// Whether to run a sanity check against CPU baseline on finish.
     #[clap(long)]
     check_with_cpu: bool,
+    /// Limit the number of simulated cycles to no more than this.
+    #[clap(long)]
+    max_cycles: Option<usize>,
 }
 
 /// Hierarchical name representation in VCD.
@@ -590,6 +593,12 @@ fn main() {
                         if ne != usize::MAX {
                             let p = *script.input_map.get(&ne).unwrap();
                             state[p as usize >> 5] &= !(1 << (p & 31));
+                        }
+                    }
+                    if let Some(max_cycles) = args.max_cycles {
+                        if offsets_timestamps.len() >= max_cycles {
+                            clilog::info!("reached maximum cycles, stop reading input vcd");
+                            break
                         }
                     }
                 }

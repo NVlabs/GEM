@@ -252,7 +252,7 @@ __device__ void simulate_block_v1(
   assert(script_size == script_pi);
 }
 
-__global__ void __maxnreg__(128) simulate_v1_noninteractive_simple_scan(
+__global__ void simulate_v1_noninteractive_simple_scan(
   usize num_blocks,
   const usize *__restrict__ blocks_start,
   const u32 *__restrict__ blocks_data,
