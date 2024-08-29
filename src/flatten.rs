@@ -55,8 +55,8 @@ pub struct FlattenedScriptV1 {
     /// 3. boomerang sections, repeat below N*16
     ///    1. local shuffle permutation
     ///       32-bit indices * 16 for each of the 256 threads.
-    ///    2. input (with inv) * 8192bits * 3
-    ///       32-bit * 256 threads * 3: xora, xorb, orb
+    ///    2. input (with inv) * 8192bits * (3+1padding)
+    ///       32-bit * 256 threads * (3+1): xora, xorb, orb, [0 padding]
     ///       0xy: and gate, out = (a^x)&(b^y).
     ///       100: passthrough, out = a.
     ///       111: invalid, can be skipped.
@@ -68,7 +68,8 @@ pub struct FlattenedScriptV1 {
     ///       followed by [2x] invert and set0.
     ///    2. permutation for the write-out enabler pins, inv. [16]
     ///       include itself inv and data inv.
-    ///       followed by [3x] clock invert, clock set0, and data invert
+    ///       followed by [3(+1padding)x]
+    ///         clock invert, clock set0, data invert, and 0 padding
     ///    -. commit the write-out
     pub blocks_data: UVec<u32>,
     /// the state size including DFF and I/O states only.
@@ -550,9 +551,12 @@ impl FlatteningPart {
                                 (bs_perm[i + 7] as u32) << 16);
                 }
             }
-            script.extend(bs_xora.into_iter());
-            script.extend(bs_xorb.into_iter());
-            script.extend(bs_orb.into_iter());
+            for i in 0..NUM_THREADS_V1 {
+                script.push(bs_xora[i]);
+                script.push(bs_xorb[i]);
+                script.push(bs_orb[i]);
+                script.push(0);
+            }
 
             last_pin2localpos = self.afters[bs_i].iter().enumerate().filter_map(|(i, &pin)| {
                 if pin == usize::MAX { None }
@@ -573,8 +577,10 @@ impl FlatteningPart {
                             (self.sram_duplicate_permute[i + 7] as u32) << 16);
             }
         }
-        script.extend(self.sram_duplicate_inv.iter().copied());
-        script.extend(self.sram_duplicate_set0.iter().copied());
+        for i in 0..NUM_THREADS_V1 {
+            script.push(self.sram_duplicate_inv[i]);
+            script.push(self.sram_duplicate_set0[i]);
+        }
         // clock enable signal
         for k in 0..4 {
             for i in ((k * 8)..self.clken_permute.len()).step_by(32) {
@@ -588,9 +594,12 @@ impl FlatteningPart {
                             (self.clken_permute[i + 7] as u32) << 16);
             }
         }
-        script.extend(self.clken_inv.iter().copied());
-        script.extend(self.clken_set0.iter().copied());
-        script.extend(self.data_inv.iter().copied());
+        for i in 0..NUM_THREADS_V1 {
+            script.push(self.clken_inv[i]);
+            script.push(self.clken_set0[i]);
+            script.push(self.data_inv[i]);
+            script.push(0);
+        }
 
         script
     }

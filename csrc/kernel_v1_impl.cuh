@@ -80,21 +80,13 @@ __device__ void simulate_block_v1(
         t_sf.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
 #define GEMV1_SHUF_INPUT_K(k_inner, t_shuffle) {                      \
           u32 k = k_outer * 4 + k_inner;                              \
-          u32 t_shuffle_1 = t_shuffle & ((1 << 16) - 1);              \
-          u32 t_shuffle_2 = t_shuffle >> 16;                          \
-          u32 t_shuffle_1_idx = t_shuffle_1 & ((1 << 13) - 1);        \
-          u32 t_shuffle_2_idx = t_shuffle_2 & ((1 << 13) - 1);        \
+          u32 t_shuffle_1_idx = t_shuffle & ((1 << 16) - 1);          \
+          u32 t_shuffle_2_idx = t_shuffle >> 16;                      \
                                                                       \
           hier_input |= (shared_state[t_shuffle_1_idx >> 5] >>        \
                          (t_shuffle_1_idx & 31) & 1) << (k * 2);      \
           hier_input |= (shared_state[t_shuffle_2_idx >> 5] >>        \
                          (t_shuffle_2_idx & 31) & 1) << (k * 2 + 1);  \
-          hier_flag_xora |= (t_shuffle_1 >> 14 & 1) << (k * 2);       \
-          hier_flag_xora |= (t_shuffle_2 >> 14 & 1) << (k * 2 + 1);   \
-          hier_flag_xorb |= (t_shuffle_1 >> 13 & 1) << (k * 2);       \
-          hier_flag_xorb |= (t_shuffle_2 >> 13 & 1) << (k * 2 + 1);   \
-          hier_flag_orb |= (t_shuffle_1 >> 15) << (k * 2);            \
-          hier_flag_orb |= (t_shuffle_2 >> 15) << (k * 2 + 1);        \
         }
         GEMV1_SHUF_INPUT_K(0, t_sf.c1);
         GEMV1_SHUF_INPUT_K(1, t_sf.c2);
@@ -103,6 +95,12 @@ __device__ void simulate_block_v1(
 #undef GEMV1_SHUF_INPUT_K
         script_pi += 256 * 4;
       }
+      VectorRead4 t_hier_flag;
+      t_hier_flag.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
+      hier_flag_xora = t_hier_flag.c1;
+      hier_flag_xorb = t_hier_flag.c2;
+      hier_flag_orb = t_hier_flag.c3;
+      script_pi += 256 * 4;
       __syncthreads();
       shared_state[threadIdx.x] = hier_input;
       __syncthreads();
@@ -152,23 +150,17 @@ __device__ void simulate_block_v1(
     for(int k_outer = 0; k_outer < 4; ++k_outer) {
       VectorRead4 t_sf;
       t_sf.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
-#define GEMV1_SHUF_SRAM_DUPL_K(k_inner, t_shuffle) {          \
-        u32 k = k_outer * 4 + k_inner;                        \
-        u32 t_shuffle_1 = t_shuffle & ((1 << 16) - 1);        \
-        u32 t_shuffle_2 = t_shuffle >> 16;                    \
-        u32 t_shuffle_1_idx = t_shuffle_1 & ((1 << 13) - 1);  \
-        u32 t_shuffle_2_idx = t_shuffle_2 & ((1 << 13) - 1);  \
-                                                              \
-        sram_duplicate_t |= (                                 \
-          ((shared_writeouts[t_shuffle_1_idx >> 5] >>         \
-            (t_shuffle_1_idx & 31) & 1)                       \
-           & ~(t_shuffle_1 >> 14)) ^ (t_shuffle_1 >> 13 & 1)  \
-          ) << (k * 2);                                       \
-        sram_duplicate_t |= (                                 \
-          ((shared_writeouts[t_shuffle_2_idx >> 5] >>         \
-            (t_shuffle_2_idx & 31) & 1)                       \
-           & ~(t_shuffle_2 >> 14)) ^ (t_shuffle_2 >> 13 & 1)  \
-          ) << (k * 2 + 1);                                   \
+#define GEMV1_SHUF_SRAM_DUPL_K(k_inner, t_shuffle) {        \
+        u32 k = k_outer * 4 + k_inner;                      \
+        u32 t_shuffle_1_idx = t_shuffle & ((1 << 16) - 1);  \
+        u32 t_shuffle_2_idx = t_shuffle >> 16;              \
+                                                            \
+        sram_duplicate_t |=                                 \
+          (shared_writeouts[t_shuffle_1_idx >> 5] >>        \
+           (t_shuffle_1_idx & 31) & 1) << (k * 2);          \
+        sram_duplicate_t |=                                 \
+          (shared_writeouts[t_shuffle_2_idx >> 5] >>        \
+           (t_shuffle_2_idx & 31) & 1) << (k * 2 + 1);      \
       }
       if(threadIdx.x < num_srams * 4 + num_output_duplicates) {
         GEMV1_SHUF_SRAM_DUPL_K(0, t_sf.c1);
@@ -179,6 +171,10 @@ __device__ void simulate_block_v1(
 #undef GEMV1_SHUF_SRAM_DUPL_K
       script_pi += 256 * 4;
     }
+    VectorRead2 t_srdup_flag;
+    t_srdup_flag.read(((const VectorRead2 *)(script + script_pi)) + threadIdx.x);
+    sram_duplicate_t = (sram_duplicate_t & ~t_srdup_flag.c2) ^ t_srdup_flag.c1;
+    script_pi += 256 * 2;
 
     if(threadIdx.x < num_srams * 4) {
       u32 addrs = sram_duplicate_t;
@@ -213,23 +209,15 @@ __device__ void simulate_block_v1(
       t_sf.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
 #define GEMV1_SHUF_CLKEN_K(k_inner, t_shuffle) {              \
         u32 k = k_outer * 4 + k_inner;                        \
-        u32 t_shuffle_1 = t_shuffle & ((1 << 16) - 1);        \
-        u32 t_shuffle_2 = t_shuffle >> 16;                    \
-        u32 t_shuffle_1_idx = t_shuffle_1 & ((1 << 13) - 1);  \
-        u32 t_shuffle_2_idx = t_shuffle_2 & ((1 << 13) - 1);  \
+        u32 t_shuffle_1_idx = t_shuffle & ((1 << 16) - 1);    \
+        u32 t_shuffle_2_idx = t_shuffle >> 16;                \
                                                               \
-        clken_perm |= (                                       \
-          ((shared_writeouts[t_shuffle_1_idx >> 5] >>         \
-            (t_shuffle_1_idx & 31) & 1)                       \
-           & ~(t_shuffle_1 >> 14)) ^ (t_shuffle_1 >> 13 & 1)  \
-          ) << (k * 2);                                       \
-        clken_perm |= (                                       \
-          ((shared_writeouts[t_shuffle_2_idx >> 5] >>         \
-            (t_shuffle_2_idx & 31) & 1)                       \
-           & ~(t_shuffle_2 >> 14)) ^ (t_shuffle_2 >> 13 & 1)  \
-          ) << (k * 2 + 1);                                   \
-        writeout_inv ^= (t_shuffle_1 >> 15) << (k * 2);       \
-        writeout_inv ^= (t_shuffle_2 >> 15) << (k * 2 + 1);   \
+        clken_perm |=                                         \
+          (shared_writeouts[t_shuffle_1_idx >> 5] >>          \
+           (t_shuffle_1_idx & 31) & 1) << (k * 2);            \
+        clken_perm |=                                         \
+          (shared_writeouts[t_shuffle_2_idx >> 5] >>          \
+           (t_shuffle_2_idx & 31) & 1) << (k * 2 + 1);        \
       }
       if(threadIdx.x < num_ios) {
         GEMV1_SHUF_CLKEN_K(0, t_sf.c1);
@@ -240,6 +228,11 @@ __device__ void simulate_block_v1(
 #undef GEMV1_SHUF_CLKEN_K
       script_pi += 256 * 4;
     }
+    VectorRead4 t_clk_wo_flag;
+    t_clk_wo_flag.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
+    script_pi += 256 * 4;
+    clken_perm = (clken_perm & ~t_clk_wo_flag.c2) ^ t_clk_wo_flag.c1;
+    writeout_inv ^= t_clk_wo_flag.c3;
 
     if(threadIdx.x < num_ios) {
       u32 old_wo = input_state[io_offset + threadIdx.x];

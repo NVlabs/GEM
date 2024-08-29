@@ -129,11 +129,11 @@ fn simulate_block_v1(
                 script_pi += 256 * 4;
             }
             for i in 0..256 {
-                hier_flag_xora[i] = script[script_pi + i];
-                hier_flag_xorb[i] = script[script_pi + 256 + i];
-                hier_flag_orb[i] = script[script_pi + 256 * 2 + i];
+                hier_flag_xora[i] = script[script_pi + i * 4];
+                hier_flag_xorb[i] = script[script_pi + i * 4 + 1];
+                hier_flag_orb[i] = script[script_pi + i * 4 + 2];
             }
-            script_pi += 256 * 3;
+            script_pi += 256 * 4;
             // [debug] hier[0] writeout
             for (i, &aigpin) in part.stages[bs_i as usize].hier[0].iter().enumerate() {
                 if aigpin == usize::MAX { continue }
@@ -216,8 +216,8 @@ fn simulate_block_v1(
             script_pi += 256 * 4;
         }
         for i in 0..(num_srams * 4 + num_output_duplicates) as usize {
-            sram_duplicate_perm[i] &= !script[script_pi + 256 + i];
-            sram_duplicate_perm[i] ^= script[script_pi + i];
+            sram_duplicate_perm[i] &= !script[script_pi + i * 2 + 1];
+            sram_duplicate_perm[i] ^= script[script_pi + i * 2];
         }
         script_pi += 256 * 2;
 
@@ -255,18 +255,16 @@ fn simulate_block_v1(
                     let t_shuffle_2_idx = (t_shuffle >> 16) as u32;
                     clken_perm[i as usize] |= (writeouts_for_clken[(t_shuffle_1_idx >> 5) as usize] >> (t_shuffle_1_idx & 31) & 1) << (k * 2);
                     clken_perm[i as usize] |= (writeouts_for_clken[(t_shuffle_2_idx >> 5) as usize] >> (t_shuffle_2_idx & 31) & 1) << (k * 2 + 1);
-                    // writeouts[i as usize] ^= (t_shuffle_1 >> 15) << (k * 2);
-                    // writeouts[i as usize] ^= (t_shuffle_2 >> 15) << (k * 2 + 1);
                 }
             }
             script_pi += 256 * 4;
         }
         for i in 0..num_ios as usize {
-            clken_perm[i] &= !script[script_pi + 256 + i];
-            clken_perm[i] ^= script[script_pi + i];
-            writeouts[i] ^= script[script_pi + 256 * 2 + i];
+            clken_perm[i] &= !script[script_pi + i * 4 + 1];
+            clken_perm[i] ^= script[script_pi + i * 4];
+            writeouts[i] ^= script[script_pi + i * 4 + 2];
         }
-        script_pi += 256 * 3;
+        script_pi += 256 * 4;
         // println!("test: clken_perm {:?}", clken_perm);
 
         for i in 0..num_ios {
