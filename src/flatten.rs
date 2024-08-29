@@ -709,7 +709,7 @@ fn build_flattened_script_v1(
         }
     }
     blocks_start.push(blocks_data.len());
-    blocks_data.extend((0..NUM_THREADS_V1 * 4).map(|_| 0)); // padding
+    blocks_data.extend((0..NUM_THREADS_V1 * 8).map(|_| 0)); // padding
 
     clilog::info!("Built script for {} blocks, reg/io state size {}, sram size {}, script size {}",
                   num_blocks, sum_state_start, sum_srams_start, blocks_data.len());

@@ -30,11 +30,14 @@ __device__ void simulate_block_v1(
 {
   int script_pi = 0;
   while(true) {
+    VectorRead2 t2_1, t2_2;
+    VectorRead4 t4_1, t4_2, t4_3, t4_4;
     shared_metadata[threadIdx.x] = script[script_pi + threadIdx.x];
+    script_pi += 256;
+    t2_1.read(((const VectorRead2 *)(script + script_pi)) + threadIdx.x);
     __syncthreads();
     int num_stages = shared_metadata[0];
     if(!num_stages) {
-      script_pi += 256;
       break;
     }
     int is_last_part = shared_metadata[1];
@@ -51,14 +54,15 @@ __device__ void simulate_block_v1(
     else {
       writeout_hook_i = writeout_hook_i >> 16;
     }
-    script_pi += 256;
 
+    t4_1.read((const VectorRead4 *)(script + script_pi + 256 * 2 * num_global_read_rounds) + threadIdx.x);
+    t4_2.read((const VectorRead4 *)(script + script_pi + 256 * 2 * num_global_read_rounds + 256 * 4) + threadIdx.x);
     u32 t_global_rd_state = 0;
-    for(int gr_i = 0; gr_i < num_global_read_rounds; ++gr_i) {
-      VectorRead2 idx_mask;
-      idx_mask.read(((const VectorRead2 *)(script + script_pi)) + threadIdx.x);
-      u32 idx = idx_mask.c1;
-      u32 mask = idx_mask.c2;
+    for(int gr_i = 0; gr_i < num_global_read_rounds; gr_i += 2) {
+      u32 idx = t2_1.c1;
+      u32 mask = t2_1.c2;
+      script_pi += 256 * 2;
+      t2_2.read(((const VectorRead2 *)(script + script_pi)) + threadIdx.x);
       if(mask) {
         u32 value = input_state[idx];
         while(mask) {
@@ -68,39 +72,62 @@ __device__ void simulate_block_v1(
           mask ^= lowbit;
         }
       }
+
+      if(gr_i + 1 >= num_global_read_rounds) break;
+      idx = t2_2.c1;
+      mask = t2_2.c2;
       script_pi += 256 * 2;
+      t2_1.read(((const VectorRead2 *)(script + script_pi)) + threadIdx.x);
+      if(mask) {
+        u32 value = input_state[idx];
+        while(mask) {
+          t_global_rd_state <<= 1;
+          u32 lowbit = mask & -mask;
+          if(value & lowbit) t_global_rd_state |= 1;
+          mask ^= lowbit;
+        }
+      }
     }
     shared_state[threadIdx.x] = t_global_rd_state;
     __syncthreads();
 
     for(int bs_i = 0; bs_i < num_stages; ++bs_i) {
       u32 hier_input = 0, hier_flag_xora = 0, hier_flag_xorb = 0, hier_flag_orb = 0;
-      for(int k_outer = 0; k_outer < 4; ++k_outer) {
-        VectorRead4 t_sf;
-        t_sf.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
-#define GEMV1_SHUF_INPUT_K(k_inner, t_shuffle) {                      \
-          u32 k = k_outer * 4 + k_inner;                              \
-          u32 t_shuffle_1_idx = t_shuffle & ((1 << 16) - 1);          \
-          u32 t_shuffle_2_idx = t_shuffle >> 16;                      \
-                                                                      \
-          hier_input |= (shared_state[t_shuffle_1_idx >> 5] >>        \
-                         (t_shuffle_1_idx & 31) & 1) << (k * 2);      \
-          hier_input |= (shared_state[t_shuffle_2_idx >> 5] >>        \
-                         (t_shuffle_2_idx & 31) & 1) << (k * 2 + 1);  \
-        }
-        GEMV1_SHUF_INPUT_K(0, t_sf.c1);
-        GEMV1_SHUF_INPUT_K(1, t_sf.c2);
-        GEMV1_SHUF_INPUT_K(2, t_sf.c3);
-        GEMV1_SHUF_INPUT_K(3, t_sf.c4);
-#undef GEMV1_SHUF_INPUT_K
-        script_pi += 256 * 4;
+#define GEMV1_SHUF_INPUT_K(k_outer, k_inner, t_shuffle) {           \
+        u32 k = k_outer * 4 + k_inner;                              \
+        u32 t_shuffle_1_idx = t_shuffle & ((1 << 16) - 1);          \
+        u32 t_shuffle_2_idx = t_shuffle >> 16;                      \
+                                                                    \
+        hier_input |= (shared_state[t_shuffle_1_idx >> 5] >>        \
+                       (t_shuffle_1_idx & 31) & 1) << (k * 2);      \
+        hier_input |= (shared_state[t_shuffle_2_idx >> 5] >>        \
+                       (t_shuffle_2_idx & 31) & 1) << (k * 2 + 1);  \
       }
-      VectorRead4 t_hier_flag;
-      t_hier_flag.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
-      hier_flag_xora = t_hier_flag.c1;
-      hier_flag_xorb = t_hier_flag.c2;
-      hier_flag_orb = t_hier_flag.c3;
+#define GEMV1_SHUF_INPUT_K_4(k_outer, t_shuffle) {    \
+        GEMV1_SHUF_INPUT_K(k_outer, 0, t_shuffle.c1); \
+        GEMV1_SHUF_INPUT_K(k_outer, 1, t_shuffle.c2); \
+        GEMV1_SHUF_INPUT_K(k_outer, 2, t_shuffle.c3); \
+        GEMV1_SHUF_INPUT_K(k_outer, 3, t_shuffle.c4); \
+      }
+      script_pi += 256 * 4 * 2;
+      t4_3.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
+      t4_4.read(((const VectorRead4 *)(script + script_pi + 256 * 4)) + threadIdx.x);
+      GEMV1_SHUF_INPUT_K_4(0, t4_1);
+      GEMV1_SHUF_INPUT_K_4(1, t4_2);
+      script_pi += 256 * 4 * 2;
+      t4_1.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
+      // t4_2.read(((const VectorRead4 *)(script + script_pi + 256 * 4)) + threadIdx.x);
+      GEMV1_SHUF_INPUT_K_4(2, t4_3);
+      GEMV1_SHUF_INPUT_K_4(3, t4_4);
+#undef GEMV1_SHUF_INPUT_K
+#undef GEMV1_SHUF_INPUT_K_4
       script_pi += 256 * 4;
+      hier_flag_xora = t4_1.c1;
+      hier_flag_xorb = t4_1.c2;
+      hier_flag_orb = t4_1.c3;
+      t4_1.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
+      t4_2.read(((const VectorRead4 *)(script + script_pi + 256 * 4)) + threadIdx.x);
+
       __syncthreads();
       shared_state[threadIdx.x] = hier_input;
       __syncthreads();
