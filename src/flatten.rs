@@ -65,7 +65,7 @@ pub struct FlattenedScriptV1 {
     ///    1. sram & additional endpoint copy permutations, inv. [16x].
     ///       only the inputs within sram and endpoint copy
     ///       range will be considered.
-    ///       followed by [2x] invert and set0.
+    ///       followed by [4x] invert, set0, and two 0 paddings.
     ///    2. permutation for the write-out enabler pins, inv. [16]
     ///       include itself inv and data inv.
     ///       followed by [3(+1padding)x]
@@ -580,6 +580,8 @@ impl FlatteningPart {
         for i in 0..NUM_THREADS_V1 {
             script.push(self.sram_duplicate_inv[i]);
             script.push(self.sram_duplicate_set0[i]);
+            script.push(0);
+            script.push(0);
         }
         // clock enable signal
         for k in 0..4 {

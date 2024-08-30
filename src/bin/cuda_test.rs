@@ -333,10 +333,10 @@ fn simulate_block_v1(
             script_pi += 256 * 4;
         }
         for i in 0..(num_srams * 4 + num_output_duplicates) as usize {
-            sram_duplicate_perm[i] &= !script[script_pi + i * 2 + 1];
-            sram_duplicate_perm[i] ^= script[script_pi + i * 2];
+            sram_duplicate_perm[i] &= !script[script_pi + i * 4 + 1];
+            sram_duplicate_perm[i] ^= script[script_pi + i * 4];
         }
-        script_pi += 256 * 2;
+        script_pi += 256 * 4;
 
         for sram_i_u32 in 0..num_srams {
             let sram_i = sram_i_u32 as usize;
