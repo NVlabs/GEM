@@ -140,28 +140,40 @@ __device__ void simulate_block_v1(
         shared_state[threadIdx.x] = ret;
       }
       __syncthreads();
-
-      // hier[1..7]
-      for(int hi = 1; hi <= 7; ++hi) {
+      // hier[1..3]
+      u32 tmp_cur_hi;
+      for(int hi = 1; hi <= 3; ++hi) {
         int hier_width = 1 << (7 - hi);
         if(threadIdx.x >= hier_width && threadIdx.x < hier_width * 2) {
           u32 hier_input_a = shared_state[threadIdx.x + hier_width];
           u32 hier_input_b = shared_state[threadIdx.x + hier_width * 2];
           u32 ret = (hier_input_a ^ hier_flag_xora) & ((hier_input_b ^ hier_flag_xorb) | hier_flag_orb);
+          tmp_cur_hi = ret;
           shared_state[threadIdx.x] = ret;
         }
         __syncthreads();
       }
-
-      // hier[8..12]
-      if(threadIdx.x == 0) {
-        u32 v1 = shared_state[1];
-        u32 r8 = ((v1 << 16) ^ hier_flag_xora) & ((v1 ^ hier_flag_xorb) | hier_flag_orb) & 0xffff0000;
-        u32 r9 = ((r8 >> 8) ^ hier_flag_xora) & (((r8 >> 16) ^ hier_flag_xorb) | hier_flag_orb) & 0xff00;
-        u32 r10 = ((r9 >> 4) ^ hier_flag_xora) & (((r9 >> 8) ^ hier_flag_xorb) | hier_flag_orb) & 0xf0;
-        u32 r11 = ((r10 >> 2) ^ hier_flag_xora) & (((r10 >> 4) ^ hier_flag_xorb) | hier_flag_orb) & 12 /* 0b1100 */;
-        u32 r12 = ((r11 >> 1) ^ hier_flag_xora) & (((r11 >> 2) ^ hier_flag_xorb) | hier_flag_orb) & 2 /* 0b10 */;
-        shared_state[0] = r8 | r9 | r10 | r11 | r12;
+      // hier[4..7], within the first warp.
+      if(threadIdx.x < 32) {
+        for(int hi = 4; hi <= 7; ++hi) {
+          int hier_width = 1 << (7 - hi);
+          u32 hier_input_a = __shfl_down_sync(0xffffffff, tmp_cur_hi, hier_width);
+          u32 hier_input_b = __shfl_down_sync(0xffffffff, tmp_cur_hi, hier_width * 2);
+          if(threadIdx.x >= hier_width && threadIdx.x < hier_width * 2) {
+            tmp_cur_hi = (hier_input_a ^ hier_flag_xora) & ((hier_input_b ^ hier_flag_xorb) | hier_flag_orb);
+          }
+        }
+        u32 v1 = __shfl_down_sync(0xffffffff, tmp_cur_hi, 1);
+        // hier[8..12]
+        if(threadIdx.x == 0) {
+          u32 r8 = ((v1 << 16) ^ hier_flag_xora) & ((v1 ^ hier_flag_xorb) | hier_flag_orb) & 0xffff0000;
+          u32 r9 = ((r8 >> 8) ^ hier_flag_xora) & (((r8 >> 16) ^ hier_flag_xorb) | hier_flag_orb) & 0xff00;
+          u32 r10 = ((r9 >> 4) ^ hier_flag_xora) & (((r9 >> 8) ^ hier_flag_xorb) | hier_flag_orb) & 0xf0;
+          u32 r11 = ((r10 >> 2) ^ hier_flag_xora) & (((r10 >> 4) ^ hier_flag_xorb) | hier_flag_orb) & 12 /* 0b1100 */;
+          u32 r12 = ((r11 >> 1) ^ hier_flag_xora) & (((r11 >> 2) ^ hier_flag_xorb) | hier_flag_orb) & 2 /* 0b10 */;
+          tmp_cur_hi = r8 | r9 | r10 | r11 | r12;
+        }
+        shared_state[threadIdx.x] = tmp_cur_hi;
       }
       __syncthreads();
 
