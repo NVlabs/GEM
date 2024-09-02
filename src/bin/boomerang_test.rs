@@ -46,7 +46,7 @@ fn main() {
 
     assert_eq!(stageds.len(), args.parts_suffixes.len(), "incorrect number of parts suffixes given");
 
-    let stages_effective_parts = stageds.iter().zip(args.parts_suffixes.iter()).rev().map(|(&(l, r, ref staged), &suffix)| {
+    let stages_effective_parts = stageds.iter().zip(args.parts_suffixes.iter()).map(|(&(l, r, ref staged), &suffix)| {
         let filename = format!("{}.stage.{}-{}.hgr.part.{}", netlistdb.name, l, match r {
             usize::MAX => "max".to_string(),
             r @ _ => format!("{}", r)

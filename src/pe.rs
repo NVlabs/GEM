@@ -92,7 +92,7 @@ fn build_one_boomerang_stage(
         level[order_i] = lvli;
     }
     let max_level = level.iter().copied().max().unwrap();
-    clilog::debug!("boomerang current max level: {}", max_level);
+    clilog::trace!("boomerang current max level: {}", max_level);
 
     fn place_bit(
         aig: &AIG,
@@ -276,7 +276,7 @@ fn build_one_boomerang_stage(
             }
         }
         if slot_at_level == usize::MAX {
-            clilog::debug!("no space at level {}", selected_level);
+            clilog::trace!("no space at level {}", selected_level);
             selected_level -= 1;
             continue
         }
@@ -295,7 +295,7 @@ fn build_one_boomerang_stage(
             }
         }
         if selected_node_ord == usize::MAX {
-            clilog::debug!("no node at level {}", selected_level);
+            clilog::trace!("no node at level {}", selected_level);
             selected_level -= 1;
             continue
         }
@@ -325,7 +325,7 @@ fn build_one_boomerang_stage(
         let num_lvl1_hier_taken =
             hier[1].iter().filter(|i| **i != usize::MAX).count();
 
-        clilog::debug!(
+        clilog::trace!(
             "taken one node at level {}, used 1-level space {}, hier visited unique {}, num nodes necessary in lvl1 {}",
             selected_level, num_lvl1_hier_taken,
             hier_visited_nodes_count.len(), lvl1_necessary_nodes.len()
@@ -335,7 +335,7 @@ fn build_one_boomerang_stage(
             num_lvl1_hier_taken.max(hier_visited_nodes_count.len())
             >= (1 << (BOOMERANG_NUM_STAGES - 1))
         {
-            clilog::debug!("REVERSED the plan due to overflow");
+            clilog::trace!("REVERSED the plan due to overflow");
             purge_bit(
                 aig, &mut hier, &mut hier_visited_nodes_count,
                 &level, &id2order,
@@ -426,7 +426,7 @@ fn build_one_boomerang_stage(
     }
 
     if *total_write_outs > BOOMERANG_MAX_WRITEOUTS - num_reserved_writeouts {
-        clilog::debug!("boomerang: write out overflowed");
+        clilog::trace!("boomerang: write out overflowed");
         return None
     }
 
@@ -442,7 +442,7 @@ fn build_one_boomerang_stage(
         while hier[1][hier1_j] != usize::MAX {
             hier1_j += 1;
             if hier1_j >= hier[1].len() {
-                clilog::debug!("boomerang: overflow putting lvl1");
+                clilog::trace!("boomerang: overflow putting lvl1");
                 return None
             }
         }
@@ -455,7 +455,7 @@ fn build_one_boomerang_stage(
     while hier[1][hier1_j] != usize::MAX {
         hier1_j += 1;
         if hier1_j >= hier[1].len() {
-            clilog::debug!("boomerang: overflow putting lvl1 (just a zero pin..)");
+            clilog::trace!("boomerang: overflow putting lvl1 (just a zero pin..)");
             return None
         }
     }
@@ -578,14 +578,13 @@ pub fn process_partitions(
         order.len()
     }).collect::<Vec<_>>();
 
-    let all_original_parts = parts.iter().enumerate().map(|(i, v)| {
+    let all_original_parts = parts.par_iter().enumerate().map(|(i, v)| {
         let part = Partition::build_one(aig, staged, v);
         if part.is_none() {
             clilog::error!("Partition {} exceeds resource constraint.", i);
         }
         part
     }).collect::<Vec<_>>();
-    panic!();
     let all_original_parts = all_original_parts.into_iter().collect::<Option<Vec<_>>>()?;
     let max_original_nstages = all_original_parts.iter()
         .map(|p| p.stages.len()).max().unwrap();
