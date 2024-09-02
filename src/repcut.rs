@@ -1,6 +1,7 @@
 /// RepCut implementation
 
 use crate::aig::{DriverType, AIG};
+use crate::staging::StagedAIG;
 use indexmap::{IndexMap, IndexSet};
 use cachedhash::CachedHash;
 use std::collections::HashMap;
@@ -50,10 +51,10 @@ impl EndpointSet {
 }
 
 impl RCHyperGraph {
-    pub fn from_aig(aig: &AIG) -> RCHyperGraph {
+    pub fn from_staged_aig(aig: &AIG, staged: &StagedAIG) -> RCHyperGraph {
         let timer_repcut_endpoint_process = clilog::stimer!("repcut endpoint process");
         let num_blocks = (
-            aig.num_endpoint_groups() + REPCUT_BITSET_BLOCK_SIZE - 1
+            staged.num_endpoint_groups() + REPCUT_BITSET_BLOCK_SIZE - 1
         ) / REPCUT_BITSET_BLOCK_SIZE;
         let mut segments_blockid_nodeid = vec![
             Vec::<Option<Arc<CachedHash<EndpointSetSegment>>>>::new();
@@ -62,17 +63,17 @@ impl RCHyperGraph {
         segments_blockid_nodeid.par_iter_mut().enumerate().for_each(|(i_block, vs)| {
             *vs = vec![None; aig.num_aigpins + 1];
             let endpoint_block_st = i_block * REPCUT_BITSET_BLOCK_SIZE;
-            let endpoint_block_ed = aig.num_endpoint_groups()
+            let endpoint_block_ed = staged.num_endpoint_groups()
                 .min(endpoint_block_st + REPCUT_BITSET_BLOCK_SIZE);
             let mut endpoint_pins = Vec::new();
             for endpt_i in endpoint_block_st..endpoint_block_ed {
-                aig.get_endpoint_group(endpt_i).for_each_input(|i| {
+                staged.get_endpoint_group(aig, endpt_i).for_each_input(|i| {
                     endpoint_pins.push(i);
                 });
             }
             let order_blk = aig.topo_traverse_generic(
                 Some(&endpoint_pins),
-                None
+                staged.primary_inputs.as_ref()
             );
             let mut unique_segs =
                 IndexSet::<Arc<CachedHash<EndpointSetSegment>>>::new();
@@ -80,7 +81,7 @@ impl RCHyperGraph {
                 HashMap::new();
             for endpt_i in endpoint_block_st..endpoint_block_ed {
                 let idx_offset = endpt_i - endpoint_block_st;
-                aig.get_endpoint_group(endpt_i).for_each_input(|i| {
+                staged.get_endpoint_group(aig, endpt_i).for_each_input(|i| {
                     let ess = ess_init.entry(i).or_default();
                     ess.bs_set[idx_offset / 64] |= 1 << (idx_offset % 64);
                 });
@@ -121,7 +122,16 @@ impl RCHyperGraph {
         }
         clilog::finish!(timer_repcut_endpoint_process);
 
-        let order_all = aig.topo_traverse_generic(None, None);
+        let mut endpoint_pins_all = Vec::new();
+        for endpt_i in 0..staged.num_endpoint_groups() {
+            staged.get_endpoint_group(aig, endpt_i).for_each_input(|i| {
+                endpoint_pins_all.push(i);
+            });
+        }
+        let order_all = aig.topo_traverse_generic(
+            Some(&endpoint_pins_all),
+            staged.primary_inputs.as_ref()
+        );
         let mut node_weights = vec![0.0f32; aig.num_aigpins + 1];
         for &i in &order_all {
             node_weights[i] = 1.;
@@ -139,14 +149,14 @@ impl RCHyperGraph {
             }
         }
         let mut num_fanouts_to_endpt = vec![0usize; aig.num_aigpins + 1];
-        for endpt_i in 0..aig.num_endpoint_groups() {
-            aig.get_endpoint_group(endpt_i).for_each_input(|i| {
+        for endpt_i in 0..staged.num_endpoint_groups() {
+            staged.get_endpoint_group(aig, endpt_i).for_each_input(|i| {
                 num_fanouts_to_endpt[i] += 1;
             });
         }
-        let endpoint_weights = (0..aig.num_endpoint_groups()).map(|endpt_i| {
+        let endpoint_weights = (0..staged.num_endpoint_groups()).map(|endpt_i| {
             let mut tot = 0.0;
-            aig.get_endpoint_group(endpt_i).for_each_input(|i| {
+            staged.get_endpoint_group(aig, endpt_i).for_each_input(|i| {
                 tot += node_weights[i] / (num_fanouts_to_endpt[i] as f32)
             });
             (tot + 0.5) as u64

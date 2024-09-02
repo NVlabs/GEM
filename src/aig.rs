@@ -41,11 +41,14 @@ pub struct RAMBlock {
 /// For primary output pins, the task is just to store.
 /// For DFFs, the task is to store only when the clock is enable.
 /// For RAMBlocks, the task is to simulate a sync SRAM.
+/// A StagedIOPin indicates a temporary live pin between different
+/// major stages but reside in the same simulated cycle.
 #[derive(Debug, Copy, Clone)]
 pub enum EndpointGroup<'i> {
     PrimaryOutput(usize),
     DFF(&'i DFF),
     RAMBlock(&'i RAMBlock),
+    StagedIOPin(usize),
 }
 
 impl EndpointGroup<'_> {
@@ -73,6 +76,7 @@ impl EndpointGroup<'_> {
                     f(ram.port_w_wr_data_iv[i] >> 1);
                 }
             },
+            Self::StagedIOPin(idx) => f(idx),
         }
     }
 }

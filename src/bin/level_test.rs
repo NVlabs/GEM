@@ -1,11 +1,7 @@
 use std::path::PathBuf;
 use gem::aigpdk::AIGPDKLeafPins;
-use gem::aig::AIG;
-use gem::repcut::RCHyperGraph;
-use gem::staging::build_staged_aigs;
+use gem::aig::{AIG, DriverType};
 use netlistdb::NetlistDB;
-use std::io::Write;
-use std::fs;
 
 #[derive(clap::Parser, Debug)]
 struct SimulatorArgs {
@@ -19,11 +15,6 @@ struct SimulatorArgs {
     /// If not specified, we will guess it from the hierarchy.
     #[clap(long)]
     top_module: Option<String>,
-    /// Level split thresholds.
-    #[clap(long, value_delimiter=',')]
-    level_split: Vec<usize>,
-    /// Output directory for hypergraph files.
-    hgr_output_dir: PathBuf,
 }
 
 fn main() {
@@ -40,23 +31,30 @@ fn main() {
 
     let aig = AIG::from_netlistdb(&netlistdb);
 
-    let stageds = build_staged_aigs(&aig, &args.level_split);
-
-    if !args.hgr_output_dir.exists() {
-        fs::create_dir_all(&args.hgr_output_dir).unwrap();
+    let order = aig.topo_traverse_generic(None, None);
+    let mut level_id = vec![0; aig.num_aigpins + 1];
+    for &i in &order {
+        if let DriverType::AndGate(a, b) = aig.drivers[i] {
+            if a >= 2 {
+                level_id[i] = level_id[i].max(level_id[a >> 1] + 1);
+            }
+            if b >= 2 {
+                level_id[i] = level_id[i].max(level_id[b >> 1] + 1);
+            }
+        }
     }
-    for &(l, r, ref staged) in &stageds {
-        let hg = RCHyperGraph::from_staged_aig(&aig, staged);
-
-        let filename = format!("{}.stage.{}-{}.hgr", netlistdb.name, l, match r {
-            usize::MAX => "max".to_string(),
-            r @ _ => format!("{}", r)
-        });
-        println!("writing {}", filename);
-        let path = args.hgr_output_dir.join(filename);
-
-        let f = std::fs::File::create(&path).unwrap();
-        let mut buf = std::io::BufWriter::new(f);
-        write!(buf, "{}", hg).unwrap();
+    let max_level = level_id.iter().copied().max().unwrap();
+    let mut num_nodes_in_level = vec![0; max_level + 1];
+    for &i in &order {
+        num_nodes_in_level[level_id[i]] += 1;
     }
+
+    println!("Number of levels: {}", max_level);
+    for (i, &num_lvlnd) in num_nodes_in_level.iter().enumerate() {
+        print!("[{i}]: {num_lvlnd},  ");
+        if i % 6 == 5 {
+            println!();
+        }
+    }
+    println!();
 }

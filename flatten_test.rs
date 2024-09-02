@@ -25,6 +25,9 @@ struct SimulatorArgs {
     /// If not specified, we will guess it from the hierarchy.
     #[clap(long)]
     top_module: Option<String>,
+    /// Level split thresholds.
+    #[clap(long, value_delimiter=',', num_args=0..)]
+    level_split: Vec<usize>,
     /// Input path for the serialized partitions.
     gemparts: PathBuf,
     /// VCD input signal path
