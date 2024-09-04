@@ -529,9 +529,10 @@ impl FlatteningPart {
             let mut local_op2lp = Vec::with_capacity(32);
             let mut bit_id = 0;
             for &(idx, mask) in v.iter().rev() {
+                let is_staged_io = (idx >> 31) != 0;
                 for k in (0..32).rev() {
                     if (mask >> k & 1) != 0 {
-                        local_op2lp.push((idx << 5 | k, (local_i * 32 + bit_id) as u16));
+                        local_op2lp.push(((is_staged_io, idx << 5 | k), (local_i * 32 + bit_id) as u16));
                         bit_id += 1;
                     }
                 }
@@ -544,7 +545,10 @@ impl FlatteningPart {
         let mut last_pin2localpos = IndexMap::new();
         for &inp in &part.stages[0].hier[0] {
             if inp == usize::MAX { continue }
-            let pos = *input_map.get(&inp).unwrap();
+            let pos = match input_map.get(&inp) {
+                Some(&pos) => (false, pos),
+                None => (true, *staged_io_map.get(&inp).unwrap())
+            };
             last_pin2localpos.insert(inp, *outputpos2localpos.get(&pos).unwrap());
         }
 
@@ -655,7 +659,7 @@ impl FlatteningPart {
 }
 
 fn build_flattened_script_v1(
-    aig: &AIG, staged: &StagedAIG,
+    aig: &AIG, stageds: &[&StagedAIG],
     parts_in_stages: &[&[Partition]],
     num_blocks: usize,
     input_layout: Vec<usize>
@@ -698,8 +702,11 @@ fn build_flattened_script_v1(
     let mut blocks_data = Vec::new();
     let mut blocks_start = Vec::<usize>::with_capacity(num_blocks * num_major_stages + 1);
     let mut stages_blocks_parts = Vec::new();
+    let mut stages_flattening_parts = Vec::new();
 
-    for init_parts in parts_in_stages.into_iter().copied() {
+    for (init_parts, &staged) in parts_in_stages.into_iter().copied().zip(
+        stageds.into_iter()
+    ) {
         // first arrange parts onto blocks.
         let mut blocks_parts = vec![vec![]; num_blocks];
         let mut tot_nstages_blocks = vec![0; num_blocks];
@@ -749,7 +756,15 @@ fn build_flattened_script_v1(
                 &mut input_map, &mut staged_io_map, &mut output_map
             );
         }
+        stages_blocks_parts.push(blocks_parts);
+        stages_flattening_parts.push(flattening_parts);
+    }
 
+    for ((blocks_parts, flattening_parts), init_parts) in stages_blocks_parts.iter().zip(
+        stages_flattening_parts.iter_mut()
+    ).zip(
+        parts_in_stages.into_iter().copied()
+    ) {
         // build script per part. we will later assemble them to blocks.
         let mut parts_data_split = vec![vec![]; init_parts.len()];
         for part_id in 0..init_parts.len() {
@@ -779,7 +794,6 @@ fn build_flattened_script_v1(
                 blocks_data[last_part_st + 1] = 1;
             }
         }
-        stages_blocks_parts.push(blocks_parts);
     }
     blocks_start.push(blocks_data.len());
     blocks_data.extend((0..NUM_THREADS_V1 * 8).map(|_| 0)); // padding
@@ -816,12 +830,12 @@ impl FlattenedScriptV1 {
     /// memory layout, each one is an AIG bit index.
     /// padding bits should be set to usize::MAX.
     pub fn from(
-        aig: &AIG, staged: &StagedAIG,
+        aig: &AIG, stageds: &[&StagedAIG],
         parts_in_stages: &[&[Partition]],
         num_blocks: usize,
         input_layout: Vec<usize>
     ) -> FlattenedScriptV1 {
         build_flattened_script_v1(
-            aig, staged, parts_in_stages, num_blocks, input_layout)
+            aig, stageds, parts_in_stages, num_blocks, input_layout)
     }
 }
