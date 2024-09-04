@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use gem::aigpdk::{AIGPDKLeafPins, AIGPDK_SRAM_SIZE};
 use gem::aig::{DriverType, AIG};
+use gem::staging::build_staged_aigs;
 use gem::pe::Partition;
 use gem::flatten::FlattenedScriptV1;
 use netlistdb::{Direction, GeneralPinName, NetlistDB};
@@ -26,6 +27,9 @@ struct SimulatorArgs {
     /// If not specified, we will guess it from the hierarchy.
     #[clap(long)]
     top_module: Option<String>,
+    /// Level split thresholds.
+    #[clap(long, value_delimiter=',')]
+    level_split: Vec<usize>,
     /// Input path for the serialized partitions.
     gemparts: PathBuf,
     /// VCD input signal path
@@ -199,10 +203,10 @@ fn simulate_block_v1(
                 let idx = script[script_pi + (i * 2)];
                 let mut mask = script[script_pi + (i * 2 + 1)];
                 if mask == 0 { continue }
-                let value = input_state[idx as usize];
-                if debug_verbose && i == 11 {
-                    println!(" => pos 11 reading global stage {_gr_i} idx {idx} mask {mask} value {value}");
-                }
+                let value = match (idx >> 31) != 0 {
+                    false => input_state[idx as usize],
+                    true => output_state[(idx ^ (1 << 31)) as usize]
+                };
                 while mask != 0 {
                     cur_state <<= 1;
                     let lowbit = mask & (-(mask as i32)) as u32;
@@ -437,10 +441,13 @@ fn main() {
     ).expect("cannot build netlist");
 
     let aig = AIG::from_netlistdb(&netlistdb);
+    let stageds = build_staged_aigs(&aig, &args.level_split);
+
     let f = std::fs::File::open(&args.gemparts).unwrap();
     let mut buf = std::io::BufReader::new(f);
-    let effective_parts: Vec<Partition> = serde_bare::from_reader(&mut buf).unwrap();
-    clilog::info!("# of effective partitions: {}", effective_parts.len());
+    let parts_in_stages: Vec<Vec<Partition>> = serde_bare::from_reader(&mut buf).unwrap();
+    clilog::info!("# of effective partitions in each stage: {:?}",
+                  parts_in_stages.iter().map(|ps| ps.len()).collect::<Vec<_>>());
 
     let mut input_layout = Vec::new();
     for (i, driv) in aig.drivers.iter().enumerate() {
@@ -450,7 +457,9 @@ fn main() {
     }
 
     let script = FlattenedScriptV1::from(
-        &aig, &effective_parts, args.num_blocks, input_layout
+        &aig, &stageds.iter().map(|(_, _, staged)| staged).collect::<Vec<_>>(),
+        &parts_in_stages.iter().map(|ps| ps.as_slice()).collect::<Vec<_>>(),
+        args.num_blocks, input_layout
     );
 
     use std::hash::{DefaultHasher, Hash, Hasher};
@@ -642,6 +651,7 @@ fn main() {
     let timer_sim = clilog::stimer!("simulation");
     ucci::simulate_v1_noninteractive_simple_scan(
         args.num_blocks,
+        script.num_major_stages,
         &script.blocks_start, &script.blocks_data,
         &mut sram_storage,
         offsets_timestamps.len(),
@@ -660,14 +670,16 @@ fn main() {
         for i in 0..offsets_timestamps.len() {
             let mut output_state = vec![0; script.reg_io_state_size as usize];
             output_state.copy_from_slice(&input_states_sanity[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)]);
-            for block_i in 0..script.num_blocks {
-                simulate_block_v1(
-                    &script.blocks_data[script.blocks_start[block_i]..script.blocks_start[block_i + 1]],
-                    &input_states_sanity[(i * script.reg_io_state_size as usize)..((i + 1) * script.reg_io_state_size as usize)],
-                    &mut output_state,
-                    &mut sram_storage_sanity,
-                    false
-                );
+            for stage_i in 0..script.num_major_stages {
+                for blk_i in 0..script.num_blocks {
+                    simulate_block_v1(
+                        &script.blocks_data[script.blocks_start[stage_i * script.num_blocks + blk_i]..script.blocks_start[stage_i * script.num_blocks + blk_i + 1]],
+                        &input_states_sanity[(i * script.reg_io_state_size as usize)..((i + 1) * script.reg_io_state_size as usize)],
+                        &mut output_state,
+                        &mut sram_storage_sanity,
+                        false
+                    );
+                }
             }
             input_states_sanity[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)].copy_from_slice(&output_state);
             if output_state != input_states_uvec[((i + 1) * script.reg_io_state_size as usize)..((i + 2) * script.reg_io_state_size as usize)] {

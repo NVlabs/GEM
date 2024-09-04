@@ -67,7 +67,10 @@ __device__ void simulate_block_v1(
       script_pi += 256 * 2;
       t2_2.read(((const VectorRead2 *)(script + script_pi)) + threadIdx.x);
       if(mask) {
-        u32 value = input_state[idx];
+        const u32 *real_input_array;
+        if(idx >> 31) real_input_array = output_state - (1 << 31);
+        else real_input_array = input_state;
+        u32 value = real_input_array[idx];
         while(mask) {
           t_global_rd_state <<= 1;
           u32 lowbit = mask & -mask;
@@ -303,6 +306,7 @@ __device__ void simulate_block_v1(
 
 __global__ void simulate_v1_noninteractive_simple_scan(
   usize num_blocks,
+  usize num_major_stages,
   const usize *__restrict__ blocks_start,
   const u32 *__restrict__ blocks_data,
   u32 *__restrict__ sram_data,
@@ -316,17 +320,24 @@ __global__ void simulate_v1_noninteractive_simple_scan(
   __shared__ u32 shared_metadata[256];
   __shared__ u32 shared_writeouts[256];
   __shared__ u32 shared_state[256];
-  usize script_start = blocks_start[blockIdx.x];
-  usize script_size = blocks_start[blockIdx.x + 1] - script_start;
+  __shared__ u32 script_starts[32], script_sizes[32];
+  assert(num_major_stages <= 32);
+  if(threadIdx.x < num_major_stages) {
+    script_starts[threadIdx.x] = blocks_start[threadIdx.x * num_blocks + blockIdx.x];
+    script_sizes[threadIdx.x] = blocks_start[threadIdx.x * num_blocks + blockIdx.x + 1] - script_starts[threadIdx.x];
+  }
+  __syncthreads();
   for(usize cycle_i = 0; cycle_i < num_cycles; ++cycle_i) {
-    simulate_block_v1(
-      blocks_data + script_start,
-      script_size,
-      states_noninteractive + cycle_i * state_size,
-      states_noninteractive + (cycle_i + 1) * state_size,
-      sram_data,
-      shared_metadata, shared_writeouts, shared_state
-      );
-    cooperative_groups::this_grid().sync();
+    for(usize stage_i = 0; stage_i < num_major_stages; ++stage_i) {
+      simulate_block_v1(
+        blocks_data + script_starts[stage_i],
+        script_sizes[stage_i],
+        states_noninteractive + cycle_i * state_size,
+        states_noninteractive + (cycle_i + 1) * state_size,
+        sram_data,
+        shared_metadata, shared_writeouts, shared_state
+        );
+      cooperative_groups::this_grid().sync();
+    }
   }
 }
