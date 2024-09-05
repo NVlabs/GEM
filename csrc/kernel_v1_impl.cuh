@@ -85,7 +85,10 @@ __device__ void simulate_block_v1(
       script_pi += 256 * 2;
       t2_1.read(((const VectorRead2 *)(script + script_pi)) + threadIdx.x);
       if(mask) {
-        u32 value = input_state[idx];
+        const u32 *real_input_array;
+        if(idx >> 31) real_input_array = output_state - (1 << 31);
+        else real_input_array = input_state;
+        u32 value = real_input_array[idx];
         while(mask) {
           t_global_rd_state <<= 1;
           u32 lowbit = mask & -mask;

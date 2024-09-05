@@ -646,7 +646,7 @@ fn main() {
     let mut input_states_uvec: UVec<_> = input_states.clone().into();
     let device = Device::CUDA(0);
     input_states_uvec.as_mut_uptr(device);
-    let mut sram_storage = UVec::new_zeroed(script.sram_storage_size as usize * AIGPDK_SRAM_SIZE, device);
+    let mut sram_storage = UVec::new_zeroed(script.sram_storage_size as usize, device);
     device.synchronize();
     let timer_sim = clilog::stimer!("simulation");
     ucci::simulate_v1_noninteractive_simple_scan(

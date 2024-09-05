@@ -139,6 +139,9 @@ fn map_global_read_to_rounds(
                 if fail { break }
                 rounds_idx_masks[round_map_j].push((offset, mask));
                 round_map_j += 1;
+                if round_map_j == NUM_THREADS_V1 {
+                    round_map_j = 0;
+                }
             }
             if fail { break }
         }
@@ -340,7 +343,11 @@ impl FlatteningPart {
         else {
             self.cnt_placed_duplicate_permute += 1;
             let dup_pos = ((self.num_writeouts - self.num_srams) * 32 - self.cnt_placed_duplicate_permute) as usize;
-            let dup_perm_pos = ((self.num_srams * 4 + self.num_duplicate_writeouts) * 32 - self.cnt_placed_duplicate_permute) as usize;
+            let mut dup_perm_pos = ((self.num_srams * 4 + self.num_duplicate_writeouts) * 32 - self.cnt_placed_duplicate_permute) as usize;
+            if dup_perm_pos >= 8192 {
+                clilog::error!(SKIPPING_BAD, "sram duplicate bit larger than expected. dirty bypass, waiting for real fix..");
+                dup_perm_pos = 8191;
+            }
             self.place_sram_duplicate(
                 dup_perm_pos, (origpos as u16, 0, 0)
             );
@@ -718,11 +725,12 @@ fn build_flattened_script_v1(
         }
         for i in num_blocks..init_parts.len() {
             let put = tot_nstages_blocks.iter().enumerate()
-                .max_by(|(_, a), (_, b)| a.cmp(b))
+                .min_by(|(_, a), (_, b)| a.cmp(b))
                 .unwrap().0;
             blocks_parts[put].push(i);
             tot_nstages_blocks[put] += init_parts[i].stages.len();
         }
+        println!("blocks_parts: {:?}", blocks_parts);
 
         // the intermediates for parts being flattened
         let mut flattening_parts: Vec<FlatteningPart> =
