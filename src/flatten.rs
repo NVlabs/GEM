@@ -125,6 +125,9 @@ fn map_global_read_to_rounds(
                 if fail { break }
                 rounds_idx_masks[round_map_j].push((offset, mask));
                 round_map_j += 1;
+                if round_map_j == NUM_THREADS_V1 {
+                    round_map_j = 0;
+                }
             }
             if fail { break }
         }
@@ -622,7 +625,7 @@ fn build_flattened_script_v1(
     }
     for i in num_blocks..init_parts.len() {
         let put = tot_nstages_blocks.iter().enumerate()
-            .max_by(|(_, a), (_, b)| a.cmp(b))
+            .min_by(|(_, a), (_, b)| a.cmp(b))
             .unwrap().0;
         blocks_parts[put].push(i);
         tot_nstages_blocks[put] += init_parts[i].stages.len();
