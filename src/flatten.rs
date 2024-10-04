@@ -343,10 +343,10 @@ impl FlatteningPart {
         else {
             self.cnt_placed_duplicate_permute += 1;
             let dup_pos = ((self.num_writeouts - self.num_srams) * 32 - self.cnt_placed_duplicate_permute) as usize;
-            let mut dup_perm_pos = ((self.num_srams * 4 + self.num_duplicate_writeouts) * 32 - self.cnt_placed_duplicate_permute) as usize;
+            let dup_perm_pos = ((self.num_srams * 4 + self.num_duplicate_writeouts) * 32 - self.cnt_placed_duplicate_permute) as usize;
             if dup_perm_pos >= 8192 {
-                clilog::error!(SKIPPING_BAD, "sram duplicate bit larger than expected. dirty bypass, waiting for real fix..");
-                dup_perm_pos = 8191;
+                panic!("sram duplicate bit larger than expected..")
+                // dup_perm_pos = 8191;
             }
             self.place_sram_duplicate(
                 dup_perm_pos, (origpos as u16, 0, 0)

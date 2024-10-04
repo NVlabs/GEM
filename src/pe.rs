@@ -537,6 +537,12 @@ impl Partition {
             .map(|(_, ckens)| ckens.len() - 1)
             .sum::<usize>();
         let num_reserved_writeouts = num_srams + (num_output_dups + 31) / 32;
+        if num_reserved_writeouts >= BOOMERANG_MAX_WRITEOUTS ||
+            num_srams * 4 + num_output_dups > BOOMERANG_MAX_WRITEOUTS
+        {
+            // overflowed writeout
+            return None
+        }
         let mut stages = Vec::<BoomerangStage>::new();
         let mut total_write_outs = 0;
         while !unrealized_comb_outputs.is_empty() {
