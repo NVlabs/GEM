@@ -132,7 +132,9 @@ impl StagedAIG {
 
         StagedAIG {
             primary_inputs: primary_inputs.cloned(),
-            primary_output_pins: nodes_at_split.iter().copied().collect(),
+            primary_output_pins: nodes_at_split.iter().copied()
+                .filter(|po| !matches!(primary_inputs, Some(pi) if pi.contains(po)))
+                .collect(),
             endpoints: endpoints_before_split
         }
     }

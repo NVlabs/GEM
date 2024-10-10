@@ -1,5 +1,15 @@
 #include "kernel_v1_impl.cuh"
 
+#define checkCudaErrors(call)                                 \
+  do {                                                        \
+    cudaError_t err = call;                                   \
+    if (err != cudaSuccess) {                                 \
+      printf("CUDA error at %s %d: %s\n", __FILE__, __LINE__, \
+             cudaGetErrorString(err));                        \
+      exit(EXIT_FAILURE);                                     \
+    }                                                         \
+  } while (0)
+
 extern "C"
 void simulate_v1_noninteractive_simple_scan_cuda(
   usize num_blocks,
@@ -18,8 +28,8 @@ void simulate_v1_noninteractive_simple_scan_cuda(
     (void *)&sram_data, (void *)&num_cycles, (void *)&state_size,
     (void *)&states_noninteractive
   };
-  cudaLaunchCooperativeKernel(
+  checkCudaErrors(cudaLaunchCooperativeKernel(
     (void *)simulate_v1_noninteractive_simple_scan, num_blocks, 256,
     arg_ptrs, 0, (cudaStream_t)0
-    );
+    ));
 }

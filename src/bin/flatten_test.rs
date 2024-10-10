@@ -155,6 +155,14 @@ fn simulate_block_v1(
                 let orb = hier_flag_orb[128 + i];
                 let ret = (a ^ xora) & ((b ^ xorb) | orb);
                 hier_inputs[128 + i] = ret;
+                // for k in 0..32 {
+                //     let apin = part.stages[bs_i as usize].hier[0][i * 32 + k];
+                //     let bpin = part.stages[bs_i as usize].hier[0][part.stages[bs_i as usize].hier[1].len() + i * 32 + k];
+                //     let opin = part.stages[bs_i as usize].hier[1][i * 32 + k];
+                //     if [352233].contains(&opin) {
+                //         println!("Got ai gate at part {} bs_i {bs_i} hi0 i {i} k {k} (pos {} put {}): {opin}={} <- f[{apin}={} ^{}, {bpin}={} ^{}|{}]", parts_indices[part_i_dbg - 1], i * 32 + k, 128 * 32 + i * 32 + k, ret >> k & 1, a >> k & 1, xora >> k & 1, b >> k & 1, xorb >> k & 1, orb >> k & 1);
+                //     }
+                // }
             }
             // hier 1 to 7
             for hi in 1..=7 {
@@ -170,7 +178,7 @@ fn simulate_block_v1(
                     //     let apin = part.stages[bs_i as usize].hier[hi][i * 32 + k];
                     //     let bpin = part.stages[bs_i as usize].hier[hi][part.stages[bs_i as usize].hier[hi + 1].len() + i * 32 + k];
                     //     let opin = part.stages[bs_i as usize].hier[hi + 1][i * 32 + k];
-                    //     if [21876 / 2].contains(&opin) {
+                    //     if [352233].contains(&opin) {
                     //         println!("Got ai gate at part {} bs_i {bs_i} hi {hi} i {i} k {k} (pos {} put {}): {opin}={} <- f[{apin}={} ^{}, {bpin}={} ^{}|{}]", parts_indices[part_i_dbg - 1], i * 32 + k, hier_width * 32 + i * 32 + k, ret >> k & 1, a >> k & 1, xora >> k & 1, b >> k & 1, xorb >> k & 1, orb >> k & 1);
                     //     }
                     // }
@@ -195,6 +203,9 @@ fn simulate_block_v1(
                     if aigpin == usize::MAX { continue }
                     let len = part.stages[bs_i as usize].hier[hi].len();
                     aigpin_values[aigpin] = (hier_inputs[(i + len) >> 5] >> ((i + len) & 31) & 1) as u8;
+                    // if aigpin == (704467 >> 1) {
+                    //     println!("[debug] aigpin {aigpin} got value {} (1 is correct) bs_i {bs_i} hi {hi} i {i} part_id {}", aigpin_values[aigpin], parts_indices[part_i_dbg]);
+                    // }
                 }
             }
 
@@ -281,6 +292,10 @@ fn simulate_block_v1(
             output_state[(io_offset + i) as usize] = wo;
         }
         println!("part complete");
+
+        // if parts_indices[part_i_dbg] == 274 {
+        //     println!("debug part 274 output ")
+        // }
 
         if is_last_part != 0 {
             break
