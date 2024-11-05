@@ -711,9 +711,9 @@ fn build_flattened_script_v1(
     let mut stages_blocks_parts = Vec::new();
     let mut stages_flattening_parts = Vec::new();
 
-    for (init_parts, &staged) in parts_in_stages.into_iter().copied().zip(
+    for (i, (init_parts, &staged)) in parts_in_stages.into_iter().copied().zip(
         stageds.into_iter()
-    ) {
+    ).enumerate() {
         // first arrange parts onto blocks.
         let mut blocks_parts = vec![vec![]; num_blocks];
         let mut tot_nstages_blocks = vec![0; num_blocks];
@@ -730,7 +730,9 @@ fn build_flattened_script_v1(
             blocks_parts[put].push(i);
             tot_nstages_blocks[put] += init_parts[i].stages.len();
         }
-        println!("blocks_parts: {:?}", blocks_parts);
+        // clilog::debug!("blocks_parts: {:?}", blocks_parts);
+        clilog::debug!("major stage {}: max total boomerang depth {}",
+                       i, tot_nstages_blocks.iter().copied().max().unwrap());
 
         // the intermediates for parts being flattened
         let mut flattening_parts: Vec<FlatteningPart> =
@@ -758,7 +760,7 @@ fn build_flattened_script_v1(
         // copied pins for different FF activation,
         // and SRAM read outputs.
         for part_id in 0..init_parts.len() {
-            clilog::debug!("initializing output for part {}", part_id);
+            // clilog::debug!("initializing output for part {}", part_id);
             flattening_parts[part_id].make_inputs_outputs(
                 aig, staged, &init_parts[part_id],
                 &mut input_map, &mut staged_io_map, &mut output_map
@@ -776,7 +778,7 @@ fn build_flattened_script_v1(
         // build script per part. we will later assemble them to blocks.
         let mut parts_data_split = vec![vec![]; init_parts.len()];
         for part_id in 0..init_parts.len() {
-            clilog::debug!("building script for part {}", part_id);
+            // clilog::debug!("building script for part {}", part_id);
             parts_data_split[part_id] = flattening_parts[part_id].build_script(
                 aig, &init_parts[part_id], &input_map, &staged_io_map
             );
