@@ -39,6 +39,8 @@ fn main() {
     ).expect("cannot build netlist");
 
     let aig = AIG::from_netlistdb(&netlistdb);
+    println!("netlist has {} pins, {} aig pins, {} and gates",
+             netlistdb.num_pins, aig.num_aigpins, aig.and_gate_cache.len());
 
     let stageds = build_staged_aigs(&aig, &args.level_split);
 

@@ -333,7 +333,12 @@ impl FlatteningPart {
             return pos
         }
         let (clken_iv_perm, clken_iv_inv, clken_iv_set0) = self.query_permute_with_pin_iv(clken_iv);
-        let origpos = *self.after_writeout_pin2pos.get(&(pin_iv >> 1)).unwrap() as usize;
+        let origpos = match self.after_writeout_pin2pos.get(&(pin_iv >> 1)) {
+            Some(origpos) => *origpos,
+            None => {
+                panic!("position of pin_iv {} (clken_iv {}) not found.. buggy boomerang, check if netlist and gemparts mismatch.", pin_iv, clken_iv)
+            }
+        } as usize;
         let r_pos = if activ_idx == 0 {
             self.place_clken_datainv(
                 origpos, clken_iv_perm, clken_iv_inv, clken_iv_set0, (pin_iv & 1) as u8
@@ -420,18 +425,29 @@ impl FlatteningPart {
                     cur_sram_id += 1;
                 },
                 EndpointGroup::PrimaryOutput(idx_iv) => {
+                    if idx_iv == 0 {
+                        panic!("primary output has zero..??")
+                    }
                     let pos = self.state_start * 32 + self.get_or_place_output_with_activation(
                         idx_iv, 1
                     ) as u32;
                     output_map.insert(idx_iv, pos);
                 },
                 EndpointGroup::StagedIOPin(idx) => {
+                    if idx == 0 {
+                        panic!("staged IO pin has zero..??")
+                    }
                     let pos = self.state_start * 32 + self.get_or_place_output_with_activation(
                         idx << 1, 1
                     ) as u32;
                     staged_io_map.insert(idx, pos);
                 },
                 EndpointGroup::DFF(dff) => {
+                    if dff.d_iv == 0 {
+                        clilog::warn!(DFF_CONST_ERR, "dff d_iv has zero, not fully optimized netlist. ignoring the error..");
+                        input_map.insert(dff.q, 0);
+                        continue
+                    }
                     let pos = self.state_start * 32 + self.get_or_place_output_with_activation(
                         dff.d_iv, dff.en_iv
                     ) as u32;
@@ -717,21 +733,23 @@ fn build_flattened_script_v1(
         // first arrange parts onto blocks.
         let mut blocks_parts = vec![vec![]; num_blocks];
         let mut tot_nstages_blocks = vec![0; num_blocks];
+        // below models the fixed pre&post-cost for each executor
+        let executor_fixed_cost = 3;
         // masonry layout of blocks. assume parts are sorted with
         // decreasing order of #stages.
         for i in 0..init_parts.len().min(num_blocks) {
             blocks_parts[i].push(i);
-            tot_nstages_blocks[i] = init_parts[i].stages.len();
+            tot_nstages_blocks[i] = init_parts[i].stages.len() + executor_fixed_cost;
         }
         for i in num_blocks..init_parts.len() {
             let put = tot_nstages_blocks.iter().enumerate()
                 .min_by(|(_, a), (_, b)| a.cmp(b))
                 .unwrap().0;
             blocks_parts[put].push(i);
-            tot_nstages_blocks[put] += init_parts[i].stages.len();
+            tot_nstages_blocks[put] += init_parts[i].stages.len() + executor_fixed_cost;
         }
         // clilog::debug!("blocks_parts: {:?}", blocks_parts);
-        clilog::debug!("major stage {}: max total boomerang depth {}",
+        clilog::debug!("major stage {}: max total boomerang depth (w/ cost) {}",
                        i, tot_nstages_blocks.iter().copied().max().unwrap());
 
         // the intermediates for parts being flattened

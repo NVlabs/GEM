@@ -568,7 +568,8 @@ impl Partition {
 pub fn process_partitions(
     aig: &AIG,
     staged: &StagedAIG,
-    mut parts: Vec<Vec<usize>>
+    mut parts: Vec<Vec<usize>>,
+    max_stage_degrad: usize,
 ) -> Option<Vec<Partition>> {
     let cnt_nodes = parts.par_iter().map(|v| {
         let mut comb_outputs = Vec::new();
@@ -596,6 +597,7 @@ pub fn process_partitions(
         .map(|p| p.stages.len()).max().unwrap();
 
     let mut effective_parts = Vec::<Partition>::new();
+    let max_trials = (all_original_parts.len() / 8).max(20);
     for (i, mut partition_self) in all_original_parts.into_iter().enumerate() {
         if parts[i].is_empty() {
             continue
@@ -643,7 +645,7 @@ pub fn process_partitions(
 
             for (merge_i, &(_cnt_diff, cnt_new, j)) in merge_choices.iter().enumerate() {
                 if merge_trials[merge_i].is_none() {
-                    if merge_i > 20 {
+                    if merge_i > max_trials {
                         break   // do not try too more
                     }
                     let rhs = merge_trials.len().min(
@@ -668,9 +670,11 @@ pub fn process_partitions(
                         merge_blacklist.insert(j);
                     }
                     Some(partition) if partition.stages.len() >
-                        max_original_nstages =>
+                        max_original_nstages + max_stage_degrad =>
                     {
-                        clilog::debug!("skipped merging {} with {} due to nstage degradation", i, j);
+                        clilog::debug!("skipped merging {} with {} due to nstage degradation: \
+                                        {} > {}", i, j, partition.stages.len(),
+                                       max_original_nstages + max_stage_degrad);
                         merge_blacklist.insert(j);
                     }
                     Some(partition) => {
@@ -700,7 +704,8 @@ pub fn process_partitions(
 pub fn process_partitions_from_hgr_parts_file(
     aig: &AIG,
     staged: &StagedAIG,
-    hgr_parts_file: &PathBuf
+    hgr_parts_file: &PathBuf,
+    max_stage_degrad: usize,
 ) -> Option<Vec<Partition>> {
     use std::io::{BufRead, BufReader};
     use std::fs::File;
@@ -720,5 +725,5 @@ pub fn process_partitions_from_hgr_parts_file(
     clilog::info!("read parts file {} with {} parts",
                   hgr_parts_file.display(), parts.len());
 
-    process_partitions(aig, staged, parts)
+    process_partitions(aig, staged, parts, max_stage_degrad)
 }

@@ -48,7 +48,43 @@ impl StagedAIG {
         }
     }
 
-    /// build a staged AIG by splitting at the given level id.
+    /// build a staged AIG by horizontal splitting given a subset
+    /// of endpoints.
+    ///
+    /// return built StagedAIG.
+    /// the endpoints are given as a slice of endpoint group indices,
+    /// that must have all staged primary output groups at the front
+    /// and original endpoints following. otherwise we panic.
+    ///
+    /// the result guarantees that the endpoint `i` corresponds to
+    /// the original staged's endpoint `endpoint_subset[i]`.
+    pub fn to_endpoint_subset(
+        &self,
+        endpoint_subset: &[usize]
+    ) -> StagedAIG {
+        let mut staged_sub = StagedAIG {
+            primary_inputs: self.primary_inputs.clone(),
+            primary_output_pins: vec![],
+            endpoints: vec![],
+        };
+        for &endpt_i in endpoint_subset {
+            if endpt_i < self.primary_output_pins.len() {
+                staged_sub.primary_output_pins.push(
+                    self.primary_output_pins[endpt_i]
+                );
+                assert!(staged_sub.endpoints.is_empty(),
+                        "endpoint subset must be in order!");
+            }
+            else {
+                staged_sub.endpoints.push(
+                    self.endpoints[endpt_i - self.primary_output_pins.len()]
+                );
+            }
+        }
+        staged_sub
+    }
+
+    /// build a staged AIG by vertical splitting at the given level id.
     ///
     /// return built StagedAIG.
     /// the active middle nodes at split can be obtained from the

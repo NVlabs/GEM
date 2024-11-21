@@ -176,7 +176,7 @@ impl AIG {
     /// if result is 0, that means the pin is dangled.
     ///
     /// we currently does not deal with negedge yet.
-    fn trace_clock_pin(&mut self, netlistdb: &NetlistDB, pinid: usize, is_negedge: bool) -> usize {
+    fn trace_clock_pin(&mut self, netlistdb: &NetlistDB, pinid: usize, is_negedge: bool, seq_cellid: usize) -> usize {
         if netlistdb.pindirect[pinid] == Direction::I {
             let netid = netlistdb.pin2net[pinid];
             if Some(netid) == netlistdb.net_zero || Some(netid) == netlistdb.net_one {
@@ -185,7 +185,7 @@ impl AIG {
             let root = netlistdb.net2pin.items[
                 netlistdb.net2pin.start[netid]
             ];
-            return self.trace_clock_pin(netlistdb, root, is_negedge)
+            return self.trace_clock_pin(netlistdb, root, is_negedge, seq_cellid)
         }
         let cellid = netlistdb.pin2cell[pinid];
         if cellid == 0 {
@@ -211,8 +211,14 @@ impl AIG {
             "INV" => !is_negedge,
             "BUF" => is_negedge,
             others @ _ => {
-                panic!("There is a multi-input cell near {} ({}) clocking a sequential element. Clock gating need to be manually patched atm.",
-                       netlistdb.pinnames[pinid].dbg_fmt_pin(), others);
+                use netlistdb::GeneralHierName;
+                panic!("Tracing clock pin of cell {} error: \
+                        there is a multi-input cell near {} ({}) \
+                        clocking this sequential element. \
+                        Clock gating need to be manually patched atm.",
+                       netlistdb.cellnames[seq_cellid].dbg_fmt_hier(),
+                       netlistdb.pinnames[pinid].dbg_fmt_pin(),
+                       others);
             }
         };
         let mut input_pin = usize::MAX;
@@ -222,7 +228,7 @@ impl AIG {
             }
         }
         assert_ne!(input_pin, usize::MAX);
-        self.trace_clock_pin(netlistdb, input_pin, prev_is_negedge)
+        self.trace_clock_pin(netlistdb, input_pin, prev_is_negedge, seq_cellid)
     }
 
     /// recursively add aig pins for netlistdb pins
@@ -303,6 +309,14 @@ impl AIG {
             q_out = self.add_and_gate(q_out, ap_r_iv);
             self.pin2aigpin_iv[pinid] = q_out;
         }
+        else if netlistdb.celltypes[cellid].as_str() == "LATCH" {
+            panic!("latches are intentionally UNSUPPORTED by GEM, \
+                    except in identified gated clocks. \n\
+                    you can link a FF&MUX-based LATCH module, \
+                    but most likely that is NOT the right solution. \n\
+                    check all your assignments inside always@(*) block \
+                    to make sure they cover all scenarios.");
+        }
         else if netlistdb.celltypes[cellid].as_str() == "$__RAMGEM_SYNC_" {
             let o = self.add_aigpin(DriverType::SRAM(cellid));
             self.pin2aigpin_iv[pinid] = o << 1;
@@ -367,7 +381,7 @@ impl AIG {
 
         for cellid in 1..netlistdb.num_cells {
             if !matches!(netlistdb.celltypes[cellid].as_str(),
-                         "DFF" | "$__RAMGEM_SYNC_") {
+                         "DFF" | "DFFSR" | "$__RAMGEM_SYNC_") {
                 continue
             }
             for pinid in netlistdb.cell2pin.iter_set(cellid) {
@@ -375,7 +389,7 @@ impl AIG {
                             "CLK" | "PORT_R_CLK" | "PORT_W_CLK") {
                     continue
                 }
-                aig.trace_clock_pin(netlistdb, pinid, false);
+                aig.trace_clock_pin(netlistdb, pinid, false, cellid);
             }
         }
         for (&clk, &(flagr, flagf)) in &aig.clock_pin2aigpins {
@@ -412,7 +426,7 @@ impl AIG {
                         "D" => ap_d_iv = pin_iv,
                         "S" => ap_s_iv = pin_iv,
                         "R" => ap_r_iv = pin_iv,
-                        "CLK" => ap_clken_iv = aig.trace_clock_pin(netlistdb, pinid, false),
+                        "CLK" => ap_clken_iv = aig.trace_clock_pin(netlistdb, pinid, false, cellid),
                         _ => {}
                     }
                 }
@@ -438,13 +452,13 @@ impl AIG {
                             sram.port_r_addr_iv[bit.unwrap()] = pin_iv;
                         },
                         "PORT_R_CLK" => {
-                            sram.port_r_en_iv = aig.trace_clock_pin(netlistdb, pinid, false);
+                            sram.port_r_en_iv = aig.trace_clock_pin(netlistdb, pinid, false, cellid);
                         },
                         "PORT_W_ADDR" => {
                             sram.port_w_addr_iv[bit.unwrap()] = pin_iv;
                         }
                         "PORT_W_CLK" => {
-                            write_clken_iv = aig.trace_clock_pin(netlistdb, pinid, false);
+                            write_clken_iv = aig.trace_clock_pin(netlistdb, pinid, false, cellid);
                         },
                         "PORT_W_WR_DATA" => {
                             sram.port_w_wr_data_iv[bit.unwrap()] = pin_iv;

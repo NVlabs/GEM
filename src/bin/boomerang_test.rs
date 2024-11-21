@@ -26,6 +26,11 @@ struct SimulatorArgs {
     parts_suffixes: Vec<usize>,
     /// Output path for the serialized partitions.
     parts_out: PathBuf,
+    /// The maximum allowance of layers for merging-induced degradations.
+    ///
+    /// By default is 0, meaning no degradation is allowed.
+    #[clap(long, default_value_t=0)]
+    max_stage_degrad: usize,
 }
 
 fn main() {
@@ -52,7 +57,8 @@ fn main() {
             r @ _ => format!("{}", r)
         }, suffix);
         let effective_parts = process_partitions_from_hgr_parts_file(
-            &aig, staged, &args.parts_dir.join(&filename)
+            &aig, staged, &args.parts_dir.join(&filename),
+            args.max_stage_degrad,
         ).expect("some partition failed to map. please increase granularity.");
 
         clilog::info!("# of effective partitions in {}: {}", filename, effective_parts.len());
