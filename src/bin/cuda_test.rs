@@ -717,9 +717,10 @@ fn main() {
     clilog::info!("write out vcd");
     let mut last_val = vec![2; out2vcd.len()];
     for &(offset, timestamp) in &offsets_timestamps {
-        if timestamp != u64::MAX {
-            writer.timestamp(timestamp).unwrap();
+        if timestamp == u64::MAX {
+            continue
         }
+        writer.timestamp(timestamp).unwrap();
         for (i, &(output_aigpin, output_pos, vid)) in out2vcd.iter().enumerate() {
             use vcd_ng::Value;
             let value_new = match output_pos {
@@ -736,12 +737,10 @@ fn main() {
                 continue
             }
             last_val[i] = value_new;
-            if timestamp != u64::MAX {
-                writer.change_scalar(vid, match value_new {
-                    1 => Value::V1,
-                    _ => Value::V0
-                }).unwrap();
-            }
+            writer.change_scalar(vid, match value_new {
+                1 => Value::V1,
+                _ => Value::V0
+            }).unwrap();
         }
     }
 }
