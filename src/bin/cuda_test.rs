@@ -549,6 +549,10 @@ fn main() {
     let out2vcd = netlistdb.cell2pin.iter_set(0).filter_map(|i| {
         if netlistdb.pindirect[i] == Direction::I {
             let aigpin = aig.pin2aigpin_iv[i];
+            if matches!(aig.drivers[aigpin >> 1], DriverType::InputPort(_)) {
+                clilog::info!("skipped output for port {} as it is a pass-through of input port.", netlistdb.pinnames[i].dbg_fmt_pin());
+                return None
+            }
             if aigpin <= 1 {
                 return Some((aigpin, u32::MAX, writer.add_wire(
                     1, &format!("{}", netlistdb.pinnames[i].dbg_fmt_pin())).unwrap()))
@@ -568,10 +572,22 @@ fn main() {
     // do simulation
     let mut state = vec![0; script.reg_io_state_size as usize];
 
-    let mut vcd_time = u64::MAX;
-    let mut last_vcd_time_active = false;
-    let mut aigpin_values_debug = vec![u8::MAX; aig.num_aigpins + 1];
-    aigpin_values_debug[0] = 0;
+    // the simulator keeps 2 previous timestamps.
+    // vcd_time: the last seen timestamp.
+    // vcd_time_last_active: the last timestamp strictly before vcd_time that has
+    // active events (e.g., watched clock posedge).
+    //
+    // when a new timestamp arrives and vcd_time has active events, we simulate
+    // the circuit with {actived edge flags from vcd_time}, but do NOT include the
+    // input port value changes. then, we associate the result output port values to
+    // vcd_time_last_active.
+    //
+    // the above complexity rises from the necessity to emulate {update, then propagate}
+    // behavior from our actual {propagate, then update} implementation.
+    let mut vcd_time_last_active = u64::MAX;
+    let mut vcd_time = 0;
+    let mut last_vcd_time_active = true;
+    let mut delayed_bit_changes = HashSet::new();
 
     let mut input_states = Vec::new();
     let mut offsets_timestamps = Vec::new();
@@ -583,7 +599,7 @@ fn main() {
                 if last_vcd_time_active {
                     // clilog::debug!("simulating t={}", vcd_time);
                     input_states.extend(state.iter().copied());
-                    offsets_timestamps.push((input_states.len(), vcd_time));
+                    offsets_timestamps.push((input_states.len(), vcd_time_last_active));
                     // reset for next timestamp
                     for (_, &(pe, ne)) in &aig.clock_pin2aigpins {
                         if pe != usize::MAX {
@@ -602,8 +618,15 @@ fn main() {
                         }
                     }
                 }
+                if last_vcd_time_active {
+                    vcd_time_last_active = vcd_time;
+                }
                 vcd_time = t;
                 last_vcd_time_active = false;
+
+                for pos in std::mem::take(&mut delayed_bit_changes) {
+                    state[(pos >> 5) as usize] ^= 1u32 << (pos & 31);
+                }
             },
             FastFlowToken::Value(FFValueChange { id, bits }) => {
                 for (pos, b) in bits.iter().enumerate() {
@@ -635,7 +658,7 @@ fn main() {
                                 state[p as usize >> 5] |= 1 << (p & 31);
                             }
                         }
-                        state[(pos >> 5) as usize] ^= 1 << (pos & 31);
+                        delayed_bit_changes.insert(pos);
                     }
                 }
             }
@@ -694,7 +717,9 @@ fn main() {
     clilog::info!("write out vcd");
     let mut last_val = vec![2; out2vcd.len()];
     for &(offset, timestamp) in &offsets_timestamps {
-        writer.timestamp(timestamp).unwrap();
+        if timestamp != u64::MAX {
+            writer.timestamp(timestamp).unwrap();
+        }
         for (i, &(output_aigpin, output_pos, vid)) in out2vcd.iter().enumerate() {
             use vcd_ng::Value;
             let value_new = match output_pos {
@@ -711,10 +736,12 @@ fn main() {
                 continue
             }
             last_val[i] = value_new;
-            writer.change_scalar(vid, match value_new {
-                1 => Value::V1,
-                _ => Value::V0
-            }).unwrap();
+            if timestamp != u64::MAX {
+                writer.change_scalar(vid, match value_new {
+                    1 => Value::V1,
+                    _ => Value::V0
+                }).unwrap();
+            }
         }
     }
 }

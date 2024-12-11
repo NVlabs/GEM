@@ -32,6 +32,10 @@ cuda = ["ulib/cuda"]
 name = "cuda_test"
 required-features = ["cuda"]
 
+[[bin]]
+name = "cuda_dummy_test"
+required-features = ["cuda"]
+
 [patch.zzdeps]
 ucc = { path = "../ucc" }
 ulib = { path = "../ulib" }
