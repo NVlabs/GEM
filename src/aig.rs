@@ -176,9 +176,16 @@ impl AIG {
     /// if result is 0, that means the pin is dangled.
     /// if an error occurs because of a undecipherable multi-input cell,
     /// we will return in error the last output pin index of that cell.
-    ///
-    /// we currently does not deal with negedge yet.
-    fn trace_clock_pin(&mut self, netlistdb: &NetlistDB, pinid: usize, is_negedge: bool) -> Result<usize, usize> {
+    fn trace_clock_pin(
+        &mut self,
+        netlistdb: &NetlistDB,
+        pinid: usize, is_negedge: bool,
+        // should we ignore cklnqd in this tracing.
+        // if set to true, we will treat cklnqd as a simple buffer.
+        // otherwise, we assert that cklnqd/en is already built in
+        // our aig mapping (pin2aigpin_iv).
+        ignore_cklnqd: bool,
+    ) -> Result<usize, usize> {
         if netlistdb.pindirect[pinid] == Direction::I {
             let netid = netlistdb.pin2net[pinid];
             if Some(netid) == netlistdb.net_zero || Some(netid) == netlistdb.net_one {
@@ -187,7 +194,10 @@ impl AIG {
             let root = netlistdb.net2pin.items[
                 netlistdb.net2pin.start[netid]
             ];
-            return self.trace_clock_pin(netlistdb, root, is_negedge)
+            return self.trace_clock_pin(
+                netlistdb, root, is_negedge,
+                ignore_cklnqd
+            )
         }
         let cellid = netlistdb.pin2cell[pinid];
         if cellid == 0 {
@@ -209,19 +219,58 @@ impl AIG {
             *clksignal = aigpin;
             return Ok(aigpin << 1)
         }
-        let prev_is_negedge = match netlistdb.celltypes[cellid].as_str() {
-            "INV" => !is_negedge,
-            "BUF" => is_negedge,
-            _ => return Err(pinid)
-        };
-        let mut input_pin = usize::MAX;
+        let mut pin_a = usize::MAX;
+        let mut pin_ck = usize::MAX;
+        let mut pin_en = usize::MAX;
+        let celltype = netlistdb.celltypes[cellid].as_str();
+        if !matches!(celltype, "INV" | "BUF" | "CKLNQD") {
+            clilog::error!("cell type {} supported on clock path. expecting only INV, BUF, or CKLNQD", celltype);
+            return Err(pinid)
+        }
         for ipin in netlistdb.cell2pin.iter_set(cellid) {
             if netlistdb.pindirect[ipin] == Direction::I {
-                input_pin = ipin;
+                match netlistdb.pinnames[ipin].1.as_str() {
+                    "A" => pin_a = ipin,
+                    "CK" => pin_ck = ipin,
+                    "EN" => pin_en = ipin,
+                    i @ _ => {
+                        clilog::error!("input pin {} unexpected for ck element {}", i, celltype);
+                        return Err(ipin)
+                    }
+                }
             }
         }
-        assert_ne!(input_pin, usize::MAX);
-        self.trace_clock_pin(netlistdb, input_pin, prev_is_negedge)
+        match celltype {
+            "INV" => {
+                assert_ne!(pin_a, usize::MAX);
+                self.trace_clock_pin(
+                    netlistdb, pin_a, !is_negedge,
+                    ignore_cklnqd
+                )
+            },
+            "BUF" => {
+                assert_ne!(pin_a, usize::MAX);
+                self.trace_clock_pin(
+                    netlistdb, pin_a, is_negedge,
+                    ignore_cklnqd
+                )
+            },
+            "CKLNQD" => {
+                assert_ne!(pin_ck, usize::MAX);
+                assert_ne!(pin_en, usize::MAX);
+                let ck_iv = self.trace_clock_pin(
+                    netlistdb, pin_ck, is_negedge,
+                    ignore_cklnqd
+                )?;
+                if ignore_cklnqd {
+                    return Ok(ck_iv)
+                }
+                let en_iv = self.pin2aigpin_iv[pin_en];
+                assert_ne!(en_iv, usize::MAX, "clken not built");
+                Ok(self.add_and_gate(ck_iv, en_iv))
+            },
+            _ => unreachable!()
+        }
     }
 
     /// recursively add aig pins for netlistdb pins
@@ -382,7 +431,10 @@ impl AIG {
                             "CLK" | "PORT_R_CLK" | "PORT_W_CLK") {
                     continue
                 }
-                if let Err(pinid) = aig.trace_clock_pin(netlistdb, pinid, false) {
+                if let Err(pinid) = aig.trace_clock_pin(
+                    netlistdb, pinid, false,
+                    true
+                ) {
                     use netlistdb::GeneralHierName;
                     panic!("Tracing clock pin of cell {} error: \
                             there is a multi-input cell driving {} \
@@ -427,7 +479,10 @@ impl AIG {
                         "D" => ap_d_iv = pin_iv,
                         "S" => ap_s_iv = pin_iv,
                         "R" => ap_r_iv = pin_iv,
-                        "CLK" => ap_clken_iv = aig.trace_clock_pin(netlistdb, pinid, false).unwrap(),
+                        "CLK" => ap_clken_iv = aig.trace_clock_pin(
+                            netlistdb, pinid, false,
+                            false
+                        ).unwrap(),
                         _ => {}
                     }
                 }
@@ -453,13 +508,19 @@ impl AIG {
                             sram.port_r_addr_iv[bit.unwrap()] = pin_iv;
                         },
                         "PORT_R_CLK" => {
-                            sram.port_r_en_iv = aig.trace_clock_pin(netlistdb, pinid, false).unwrap();
+                            sram.port_r_en_iv = aig.trace_clock_pin(
+                                netlistdb, pinid, false,
+                                false
+                            ).unwrap();
                         },
                         "PORT_W_ADDR" => {
                             sram.port_w_addr_iv[bit.unwrap()] = pin_iv;
                         }
                         "PORT_W_CLK" => {
-                            write_clken_iv = aig.trace_clock_pin(netlistdb, pinid, false).unwrap();
+                            write_clken_iv = aig.trace_clock_pin(
+                                netlistdb, pinid, false,
+                                false
+                            ).unwrap();
                         },
                         "PORT_W_WR_DATA" => {
                             sram.port_w_wr_data_iv[bit.unwrap()] = pin_iv;

@@ -1,4 +1,5 @@
 #include <crates/ulib/includes.hpp>
+#include <cstdio>
 #include <cooperative_groups.h>
 
 struct alignas(8) VectorRead2 {

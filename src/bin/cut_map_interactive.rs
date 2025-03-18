@@ -4,7 +4,7 @@
 //! The key idea is to only repartition the endpoint groups that
 //! are unable to be mapped.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use gem::repcut::RCHyperGraph;
 use gem::aigpdk::AIGPDKLeafPins;
 use gem::aig::AIG;
@@ -14,7 +14,7 @@ use netlistdb::NetlistDB;
 use rayon::prelude::*;
 
 /// Call an external hypergraph partitioner
-fn run_par(hg: &RCHyperGraph, num_parts: usize) -> Vec<Vec<usize>> {
+fn run_par(hmetis_bin: &Path, hg: &RCHyperGraph, num_parts: usize) -> Vec<Vec<usize>> {
     clilog::debug!("invoking partitioner (#parts {})", num_parts);
     use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::fs::File;
@@ -28,7 +28,7 @@ fn run_par(hg: &RCHyperGraph, num_parts: usize) -> Vec<Vec<usize>> {
     write!(buf, "{}", hg).unwrap();
     buf.into_inner().unwrap().sync_all().unwrap();
 
-    std::process::Command::new("/raid/zizhengg/misc/hmetis-2.0pre1/Linux-x86_64/hmetis2.0pre1")
+    std::process::Command::new(hmetis_bin)
         .arg(&hgr_path)
         .arg(format!("{}", num_parts))
         .spawn()
@@ -56,6 +56,12 @@ fn run_par(hg: &RCHyperGraph, num_parts: usize) -> Vec<Vec<usize>> {
 
 #[derive(clap::Parser, Debug)]
 struct SimulatorArgs {
+    /// Path to hmetis (or compatible partitioner) binary.
+    /// We will launch it with `/path/to/binary graph.hgr NUM_PARTS` and
+    /// expect a partition result with file name `graph.hgr.part.NUM_PARTS`.
+    ///
+    /// E.g.: `"/path/to/hmetis-2.0pre1/Linux-x86_64/hmetis2.0pre1"`
+    hmetis_bin: PathBuf,
     /// Gate-level verilog path synthesized in our provided library.
     ///
     /// If your design is still at RTL level, you should synthesize it
@@ -113,7 +119,7 @@ fn main() {
             clilog::info!("current: {} endpoints, try {} parts", unrealized_endpoints.len(), num_parts);
             let staged_ur = staged.to_endpoint_subset(&unrealized_endpoints);
             let hg_ur = RCHyperGraph::from_staged_aig(&aig, &staged_ur);
-            let mut parts_indices = run_par(&hg_ur, num_parts);
+            let mut parts_indices = run_par(&args.hmetis_bin, &hg_ur, num_parts);
             for idcs in &mut parts_indices {
                 for i in idcs {
                     *i = unrealized_endpoints[*i];
