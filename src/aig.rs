@@ -220,7 +220,7 @@ impl AIG {
             return Ok(aigpin << 1)
         }
         let mut pin_a = usize::MAX;
-        let mut pin_ck = usize::MAX;
+        let mut pin_cp = usize::MAX;
         let mut pin_en = usize::MAX;
         let celltype = netlistdb.celltypes[cellid].as_str();
         if !matches!(celltype, "INV" | "BUF" | "CKLNQD") {
@@ -231,7 +231,7 @@ impl AIG {
             if netlistdb.pindirect[ipin] == Direction::I {
                 match netlistdb.pinnames[ipin].1.as_str() {
                     "A" => pin_a = ipin,
-                    "CK" => pin_ck = ipin,
+                    "CP" => pin_cp = ipin,
                     "EN" => pin_en = ipin,
                     i @ _ => {
                         clilog::error!("input pin {} unexpected for ck element {}", i, celltype);
@@ -256,10 +256,10 @@ impl AIG {
                 )
             },
             "CKLNQD" => {
-                assert_ne!(pin_ck, usize::MAX);
+                assert_ne!(pin_cp, usize::MAX);
                 assert_ne!(pin_en, usize::MAX);
                 let ck_iv = self.trace_clock_pin(
-                    netlistdb, pin_ck, is_negedge,
+                    netlistdb, pin_cp, is_negedge,
                     ignore_cklnqd
                 )?;
                 if ignore_cklnqd {
