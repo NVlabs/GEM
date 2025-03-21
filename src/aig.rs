@@ -152,6 +152,8 @@ impl AIG {
     }
 
     fn add_and_gate(&mut self, a: usize, b: usize) -> usize {
+        assert_ne!(a | 1, usize::MAX);
+        assert_ne!(b | 1, usize::MAX);
         if a == 0 || b == 0 {
             return 0
         }
@@ -232,7 +234,7 @@ impl AIG {
                 match netlistdb.pinnames[ipin].1.as_str() {
                     "A" => pin_a = ipin,
                     "CP" => pin_cp = ipin,
-                    "EN" => pin_en = ipin,
+                    "E" => pin_en = ipin,
                     i @ _ => {
                         clilog::error!("input pin {} unexpected for ck element {}", i, celltype);
                         return Err(ipin)
@@ -299,6 +301,7 @@ impl AIG {
         topo_instack[pinid] = true;
         let netid = netlistdb.pin2net[pinid];
         let cellid = netlistdb.pin2cell[pinid];
+        let celltype = netlistdb.celltypes[cellid].as_str();
         if netlistdb.pindirect[pinid] == Direction::I {
             if Some(netid) == netlistdb.net_zero {
                 self.pin2aigpin_iv[pinid] = 0;
@@ -326,7 +329,7 @@ impl AIG {
             );
             self.pin2aigpin_iv[pinid] = aigpin << 1;
         }
-        else if matches!(netlistdb.celltypes[cellid].as_str(), "DFF" | "DFFSR") {
+        else if matches!(celltype, "DFF" | "DFFSR") {
             let q = self.add_aigpin(DriverType::DFF(cellid));
             let dff = self.dffs.entry(cellid).or_default();
             dff.q = q;
@@ -351,7 +354,7 @@ impl AIG {
             q_out = self.add_and_gate(q_out, ap_r_iv);
             self.pin2aigpin_iv[pinid] = q_out;
         }
-        else if netlistdb.celltypes[cellid].as_str() == "LATCH" {
+        else if celltype == "LATCH" {
             panic!("latches are intentionally UNSUPPORTED by GEM, \
                     except in identified gated clocks. \n\
                     you can link a FF&MUX-based LATCH module, \
@@ -359,13 +362,33 @@ impl AIG {
                     check all your assignments inside always@(*) block \
                     to make sure they cover all scenarios.");
         }
-        else if netlistdb.celltypes[cellid].as_str() == "$__RAMGEM_SYNC_" {
+        else if celltype == "$__RAMGEM_SYNC_" {
             let o = self.add_aigpin(DriverType::SRAM(cellid));
             self.pin2aigpin_iv[pinid] = o << 1;
             assert_eq!(netlistdb.pinnames[pinid].1.as_str(),
                        "PORT_R_RD_DATA");
             let sram = self.srams.entry(cellid).or_default();
             sram.port_r_rd_data[netlistdb.pinnames[pinid].2.unwrap() as usize] = o;
+        }
+        else if celltype == "CKLNQD" {
+            let mut prev_cp = usize::MAX;
+            let mut prev_en = usize::MAX;
+            for pinid in netlistdb.cell2pin.iter_set(cellid) {
+                match netlistdb.pinnames[pinid].1.as_str() {
+                    "CP" => prev_cp = pinid,
+                    "E" => prev_en = pinid,
+                    _ => {}
+                }
+            }
+            assert_ne!(prev_cp, usize::MAX);
+            assert_ne!(prev_en, usize::MAX);
+            for prev in [prev_cp, prev_en] {
+                self.dfs_netlistdb_build_aig(
+                    netlistdb, topo_vis, topo_instack,
+                    prev
+                );
+            }
+            // do not define pin2aigpin_iv[pinid] which is CKLNQD/Q and unused in logic.
         }
         else {
             let mut prev_a = usize::MAX;
@@ -385,7 +408,7 @@ impl AIG {
                     );
                 }
             }
-            match netlistdb.celltypes[cellid].as_str() {
+            match celltype {
                 "AND2_00_0" | "AND2_01_0" | "AND2_10_0" | "AND2_11_0" | "AND2_11_1" => {
                     assert_ne!(prev_a, usize::MAX);
                     assert_ne!(prev_b, usize::MAX);
