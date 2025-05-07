@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 module AND2_00_0 (A, B, Y);
 input  A ;
 input  B ;
