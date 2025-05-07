@@ -1,0 +1,41 @@
+
+
+# RAMGEM: virtual 13-bit address, 32-bit data ram.
+# size: 2**13 * 32 = 256k bits = 32 kB
+# two read ports, one write port. (first read, then write)
+# read and write controlled by a single clock.
+
+ram block $__RAMGEM_SYNC_ {
+    # Has 13 address bits
+    abits 13;
+    # The r/w width is 32 bits
+    width 32;
+    cost 1;
+    # init any;
+    byte 1;
+
+    port sw "W" {
+        clock posedge;
+    }
+    port sr "R" {
+        clock posedge;
+    }
+}
+
+# this is a trap cell: if it is used, we will print an error.
+# only sync memory is supported in simulator.
+ram block $__RAMGEM_ASYNC_ {
+    # Has 13 address bits
+    abits 13;
+    # The r/w width is 32 bits
+    width 32;
+    cost 100;
+    # init any;
+    byte 1;
+
+    port sw "W" {
+        clock posedge;
+    }
+    port ar "R" {
+    }
+}
