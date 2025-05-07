@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 //! Splitting deep circuit into major stages at global level indices.
 //!
 //! This is crucial in efficiently handling large and deep circuits
