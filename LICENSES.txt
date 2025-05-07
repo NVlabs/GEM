@@ -1,4 +1,4 @@
-GL0AM uses the following third-party libraries:
+GEM uses the following third-party libraries:
 
 1. eda-infra-rs
    - Repository: https://github.com/gzz2000/eda-infra-rs/tree/master
