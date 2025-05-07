@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 //! AIGPDK is a special artificial cell library used in GEM.
 
 use netlistdb::{Direction, LeafPinProvider};
