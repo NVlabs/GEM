@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 //! And-inverter graph format
 //!
 //! An AIG is derived from netlistdb synthesized in AIGPDK.
