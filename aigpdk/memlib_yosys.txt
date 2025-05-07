@@ -1,4 +1,5 @@
-
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 # RAMGEM: virtual 13-bit address, 32-bit data ram.
 # size: 2**13 * 32 = 256k bits = 32 kB
