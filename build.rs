@@ -1,4 +1,6 @@
 //! this build script compiles GEM kernels
+// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 fn main() {
     println!("Building cuda source files for GEM...");
