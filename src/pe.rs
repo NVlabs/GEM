@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 //! Partition executor
 
 use crate::aig::{DriverType, AIG, EndpointGroup};
