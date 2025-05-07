@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 //! this binary only measures performance for 10000 cycles. it does not
 //! input or output actual VCD.
 
