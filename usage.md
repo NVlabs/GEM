@@ -2,6 +2,8 @@
 
 **Caveats**: currently GEM only supports non-interactive testbenches. This means the input to the circuit needs to be a static waveform (e.g., VCD). Registers and clock gates inside the circuit are allowed, but latches and other asynchronous sequential logics are currently unsupported.
 
+**Dataset**: Some (namely, netlists after AIG transformation in Steps 1-2 below, and reference VCDs) input data is available [here](https://drive.google.com/drive/folders/1M42vFoVZhG4ZjyD1hqYD0Hrw8F1rwNXd?usp=drive_link) .
+
 ## Step 0. Download the AIG Process Kit
 Go to [aigpdk](./aigpdk) directory where you can download `aigpdk.lib`, `aigpdk.v`, and `memlib_yosys.txt`. You will need them later in the flow.
 
