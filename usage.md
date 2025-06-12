@@ -5,7 +5,7 @@
 **Dataset**: Some (namely, netlists after AIG transformation in Steps 1-2 below, and reference VCDs) input data is available [here](https://drive.google.com/drive/folders/1M42vFoVZhG4ZjyD1hqYD0Hrw8F1rwNXd?usp=drive_link) .
 
 ## Step 0. Download the AIG Process Kit
-Go to [aigpdk](./aigpdk) directory where you can download `aigpdk.lib`, `aigpdk.v`, and `memlib_yosys.txt`. You will need them later in the flow.
+Go to [aigpdk](./aigpdk) directory where you can download `aigpdk.lib`, `aigpdk_nomem.lib`, `aigpdk.v`, and `memlib_yosys.txt`. You will need them later in the flow.
 
 Before continuing, make sure your design contains only synchronous logic.
 If your design has clock gates implemented in your RTL code, you need to replace them manually with instantiations to the `CKLNQD` module in `aigpdk.v`.
@@ -88,13 +88,13 @@ write -format verilog -hierarchy -out gatelevel.gv
 synth -flatten
 delete t:$print
 
-# change path/to/aigpdk.lib to a correct path. same for other commands.
-dfflibmap -liberty path/to/aigpdk.lib
+# change path/to/aigpdk_nomem.lib to a correct path. same for other commands.
+dfflibmap -liberty path/to/aigpdk_nomem.lib
 opt_clean -purge
-abc -liberty /home/zzscratch1/scratch/aigpdk/aigpdk.lib
+abc -liberty path/to/aigpdk_nomem.lib
 opt_clean -purge
 techmap
-abc -liberty /home/zzscratch1/scratch/aigpdk/aigpdk.lib
+abc -liberty path/to/aigpdk_nomem.lib
 opt_clean -purge
 
 # write out
