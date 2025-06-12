@@ -1,0 +1,710 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */
+/* SPDX-License-Identifier: Apache-2.0 */
+library(aigpdk) {
+
+  delay_model : table_lookup;
+  in_place_swap_mode : match_footprint;
+
+  /* unit attributes */
+  time_unit : "1ps";
+  voltage_unit : "1V";
+  current_unit : "1uA";
+  pulling_resistance_unit : "1kohm";
+  leakage_power_unit : "1nW";
+  capacitive_load_unit (1,pf);
+
+  slew_upper_threshold_pct_rise : 80;
+  slew_lower_threshold_pct_rise : 20;
+  slew_upper_threshold_pct_fall : 80;
+  slew_lower_threshold_pct_fall : 20;
+  input_threshold_pct_rise : 50;
+  input_threshold_pct_fall : 50;
+  output_threshold_pct_rise : 50;
+  output_threshold_pct_fall : 50;
+  nom_process : 1;
+  nom_voltage : 1.8;
+  nom_temperature : 25;
+  operating_conditions ( typical ) {
+     process : 1;
+     voltage : 1.8;
+     temperature : 25;
+  }
+  default_operating_conditions : typical;
+  default_max_capacitance: 999999999.9;
+
+  type ( sram_addr_bus_13 ) {
+    base_type : array ;
+    data_type : bit ;
+    bit_width : 13 ;
+    bit_from : 12 ;
+    bit_to : 0 ;
+    downto : true ;
+  }
+
+  type ( sram_data_bus_32 ) {
+    base_type : array ;
+    data_type : bit ;
+    bit_width : 32 ;
+    bit_from : 31 ;
+    bit_to : 0 ;
+    downto : true ;
+  }
+
+cell (AND2_00_0) {
+  area : 32;
+  cell_leakage_power : 0.0746794;
+  pin(A)  {
+    direction : input;
+    capacitance : 0.0129077;
+    rise_capacitance : 0.0129077;
+    fall_capacitance : 0.0128842;
+  }
+  pin(B)  {
+    direction : input;
+    capacitance : 0.0125298;
+    rise_capacitance : 0.0125298;
+    fall_capacitance : 0.0122586;
+  }
+  pin(Y)  {
+    direction : output;
+    capacitance : 0;
+    rise_capacitance : 0;
+    fall_capacitance : 0;
+    function : "(A B)";
+    timing() {
+      related_pin : "A";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+    timing() {
+      related_pin : "B";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+  }
+}
+
+cell (AND2_01_0) {
+  area : 32;
+  cell_leakage_power : 0.0746794;
+  pin(A)  {
+    direction : input;
+    capacitance : 0.0129077;
+    rise_capacitance : 0.0129077;
+    fall_capacitance : 0.0128842;
+  }
+  pin(B)  {
+    direction : input;
+    capacitance : 0.0125298;
+    rise_capacitance : 0.0125298;
+    fall_capacitance : 0.0122586;
+  }
+  pin(Y)  {
+    direction : output;
+    capacitance : 0;
+    rise_capacitance : 0;
+    fall_capacitance : 0;
+    function : "(A B')";
+    timing() {
+      related_pin : "A";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+    timing() {
+      related_pin : "B";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+  }
+}
+
+cell (AND2_10_0) {
+  area : 32;
+  cell_leakage_power : 0.0746794;
+  pin(A)  {
+    direction : input;
+    capacitance : 0.0129077;
+    rise_capacitance : 0.0129077;
+    fall_capacitance : 0.0128842;
+  }
+  pin(B)  {
+    direction : input;
+    capacitance : 0.0125298;
+    rise_capacitance : 0.0125298;
+    fall_capacitance : 0.0122586;
+  }
+  pin(Y)  {
+    direction : output;
+    capacitance : 0;
+    rise_capacitance : 0;
+    fall_capacitance : 0;
+    function : "(A' B)";
+    timing() {
+      related_pin : "A";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+    timing() {
+      related_pin : "B";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+  }
+}
+
+cell (AND2_11_0) {
+  area : 32;
+  cell_leakage_power : 0.0746794;
+  pin(A)  {
+    direction : input;
+    capacitance : 0.0129077;
+    rise_capacitance : 0.0129077;
+    fall_capacitance : 0.0128842;
+  }
+  pin(B)  {
+    direction : input;
+    capacitance : 0.0125298;
+    rise_capacitance : 0.0125298;
+    fall_capacitance : 0.0122586;
+  }
+  pin(Y)  {
+    direction : output;
+    capacitance : 0;
+    rise_capacitance : 0;
+    fall_capacitance : 0;
+    function : "(A' B')";
+    timing() {
+      related_pin : "A";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+    timing() {
+      related_pin : "B";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+  }
+}
+
+cell (AND2_11_1) {
+  area : 32;
+  cell_leakage_power : 0.0746794;
+  pin(A)  {
+    direction : input;
+    capacitance : 0.0129077;
+    rise_capacitance : 0.0129077;
+    fall_capacitance : 0.0128842;
+  }
+  pin(B)  {
+    direction : input;
+    capacitance : 0.0125298;
+    rise_capacitance : 0.0125298;
+    fall_capacitance : 0.0122586;
+  }
+  pin(Y)  {
+    direction : output;
+    capacitance : 0;
+    rise_capacitance : 0;
+    fall_capacitance : 0;
+    function : "(A + B)";
+    timing() {
+      related_pin : "A";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+    timing() {
+      related_pin : "B";
+      timing_sense : positive_unate;
+      cell_rise(scalar) {
+        values ( "1.0" );
+      }
+      rise_transition(scalar) {
+        values ( "1.0" );
+      }
+      cell_fall(scalar) {
+        values ( "1.0" );
+      }
+      fall_transition(scalar) {
+        values ( "1.0" );
+      }
+    }
+  }
+}
+
+cell (INV) {
+  cell_footprint : inv;
+  area : 0;
+  cell_leakage_power : 0.0221741;
+  pin(A)  {
+    direction : input;
+    capacitance : 0.00932456;
+    rise_capacitance : 0.00932196;
+    fall_capacitance : 0.00932456;
+  }
+  pin(Y)  {
+    direction : output;
+    capacitance : 0;
+    rise_capacitance : 0;
+    fall_capacitance : 0;
+    function : "(!A)";
+    timing() {
+      related_pin : "A";
+      timing_sense : negative_unate;
+      cell_fall(scalar) {
+        values ( "0.0001" );
+      }
+      fall_transition(scalar) {
+        values ( "0.0001" );
+      }
+      cell_rise(scalar) {
+        values ( "0.0001" );
+      }
+      rise_transition(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+}
+
+cell (BUF) {
+  cell_footprint : buf;
+  area : 0;
+  cell_leakage_power : 0.0221741;
+  pin(A)  {
+    direction : input;
+    capacitance : 0.00932456;
+    rise_capacitance : 0.00932196;
+    fall_capacitance : 0.00932456;
+  }
+  pin(Y)  {
+    direction : output;
+    capacitance : 0;
+    rise_capacitance : 0;
+    fall_capacitance : 0;
+    function : "A";
+    timing() {
+      related_pin : "A";
+      timing_sense : positive_unate;
+      cell_fall(scalar) {
+        values ( "0.0001" );
+      }
+      fall_transition(scalar) {
+        values ( "0.0001" );
+      }
+      cell_rise(scalar) {
+        values ( "0.0001" );
+      }
+      rise_transition(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+}
+
+/* ----------------- *
+ * Design : DFFPOSX1 *
+ * ----------------- */
+cell (DFF) {
+area : 100;
+  cell_leakage_power : 0.160725;
+  ff (DS0000,P0002) {
+    next_state : "D";
+    clocked_on : "CLK";
+  }
+  pin(CLK)  {
+    direction : input;
+    capacitance : 0.0279235;
+    rise_capacitance : 0.0279235;
+    fall_capacitance : 0.0274634;
+    clock : true;
+    min_pulse_width_high : 0.106969;
+    min_pulse_width_low : 0.09927;
+  }
+  pin(D)  {
+    direction : input;
+    capacitance : 0.00882947;
+    rise_capacitance : 0.00882947;
+    fall_capacitance : 0.00881001;
+    timing() {
+      related_pin : "CLK";
+      timing_type : hold_rising;
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+      fall_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+    timing() {
+      related_pin : "CLK";
+      timing_type : setup_rising;
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+      fall_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+  pin(Q)  {
+    direction : output;
+    capacitance : 0;
+    rise_capacitance : 0;
+    fall_capacitance : 0;
+    function : "DS0000";
+    timing() {
+      related_pin : "CLK";
+      timing_sense : non_unate;
+      timing_type : rising_edge;
+      cell_fall(scalar) {
+        values ( "0.0001" );
+      }
+      fall_transition(scalar) {
+        values ( "0.0001" );
+      }
+      cell_rise(scalar) {
+        values ( "0.0001" );
+      }
+      rise_transition(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+}
+
+/* -------------- *
+ * Design : DFFSR *
+ * -------------- */
+cell (DFFSR) {
+area : 176;
+  cell_leakage_power : 0.27727;
+  ff (P0002,P0003) {
+    next_state : "D";
+    clocked_on : "CLK";
+    clear : "(!R)";
+    preset : "(!S)";
+    clear_preset_var1 : L;
+  }
+  pin(CLK)  {
+    direction : input;
+    capacitance : 0.00937511;
+    rise_capacitance : 0.00932314;
+    fall_capacitance : 0.00937511;
+    clock : true;
+  }
+  pin(D)  {
+    direction : input;
+    capacitance : 0.00940895;
+    rise_capacitance : 0.00940895;
+    fall_capacitance : 0.00932956;
+    timing() {
+      related_pin : "CLK";
+      timing_type : hold_rising;
+      when : "S&R";
+      sdf_cond : "S\&R";
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+      fall_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+    timing() {
+      related_pin : "CLK";
+      timing_type : setup_rising;
+      when : "S&R";
+      sdf_cond : "S\&R";
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+      fall_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+  pin(Q)  {
+    direction : output;
+    capacitance : 0;
+    rise_capacitance : 0;
+    fall_capacitance : 0;
+    function : "P0002";
+    timing() {
+      related_pin : "CLK";
+      timing_sense : non_unate;
+      timing_type : rising_edge;
+      cell_fall(scalar) {
+        values ( "0.0001" );
+      }
+      fall_transition(scalar) {
+        values ( "0.0001" );
+      }
+      cell_rise(scalar) {
+        values ( "0.0001" );
+      }
+      rise_transition(scalar) {
+        values ( "0.0001" );
+      }
+    }
+    timing() {
+      related_pin : "R";
+      timing_sense : positive_unate;
+      timing_type : clear;
+      cell_fall(scalar) {
+        values ( "0.0001" );
+      }
+      fall_transition(scalar) {
+        values ( "0.0001" );
+      }
+      cell_rise(scalar) {
+        values ( "0.0001" );
+      }
+      rise_transition(scalar) {
+        values ( "0.0001" );
+      }
+    }
+    timing() {
+      related_pin : "S";
+      timing_sense : negative_unate;
+      timing_type : preset;
+      cell_rise(scalar) {
+        values ( "0.0001" );
+      }
+      rise_transition(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+  pin(R)  {
+    direction : input;
+    capacitance : 0.0255048;
+    rise_capacitance : 0.0255048;
+    fall_capacitance : 0.0220338;
+    min_pulse_width_low : 0.152176;
+    timing() {
+      related_pin : "CLK";
+      timing_type : recovery_rising;
+      when : "D&S";
+      sdf_cond : "D\&S";
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+    timing() {
+      related_pin : "S";
+      timing_type : recovery_rising;
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+    timing() {
+      related_pin : "CLK";
+      timing_type : removal_rising;
+      when : "D&S";
+      sdf_cond : "D\&S";
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+  pin(S)  {
+    direction : input;
+    capacitance : 0.0230606;
+    rise_capacitance : 0.0141532;
+    fall_capacitance : 0.0230606;
+    timing() {
+      related_pin : "CLK";
+      timing_type : recovery_rising;
+      when : "!D&R";
+      sdf_cond : "\~D\&R";
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+    timing() {
+      related_pin : "R";
+      timing_type : recovery_rising;
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+    timing() {
+      related_pin : "CLK";
+      timing_type : removal_rising;
+      when : "!D&R";
+      sdf_cond : "\~D\&R";
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+}
+
+cell (CKLNQD) {
+area : 100;
+  cell_leakage_power : 0.160725;
+  clock_gating_integrated_cell : latch_posedge;
+
+  statetable ("  CP  E", " QD ") {
+    table : "  L   L :  -  : L   , \
+L   H :  -  : H   , \
+H   - :  -  : N ";
+  }
+
+  pin(CP) {
+    clock : true;
+    clock_gate_clock_pin : true;
+    direction : input;
+    capacitance : 0.0279235;
+  }
+  pin(E) {
+    clock_gate_enable_pin : true;
+    direction : input;
+    capacitance : 0.00882947;
+    timing () {
+      related_pin : "CP";
+      timing_type : hold_rising;
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+      fall_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+    timing () {
+      related_pin : "CP";
+      timing_type : setup_rising;
+      rise_constraint(scalar) {
+        values ( "0.0001" );
+      }
+      fall_constraint(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+  pin(Q) {
+    clock_gate_out_pin : true;
+    direction : output;
+    state_function : "CP*QD";
+    timing () {
+      related_pin : "CP";
+      timing_sense : positive_unate;
+      cell_fall(scalar) {
+        values ( "0.0001" );
+      }
+      fall_transition(scalar) {
+        values ( "0.0001" );
+      }
+      cell_rise(scalar) {
+        values ( "0.0001" );
+      }
+      rise_transition(scalar) {
+        values ( "0.0001" );
+      }
+    }
+  }
+  pin(QD) {
+    direction : internal;
+    internal_node : "QD";
+  }
+}
+
+}
