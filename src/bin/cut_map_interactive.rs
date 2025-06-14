@@ -6,7 +6,7 @@
 //! The key idea is to only repartition the endpoint groups that
 //! are unable to be mapped.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use gem::repcut::RCHyperGraph;
 use gem::aigpdk::AIGPDKLeafPins;
 use gem::aig::AIG;
@@ -15,55 +15,19 @@ use gem::pe::{process_partitions, Partition};
 use netlistdb::NetlistDB;
 use rayon::prelude::*;
 
-/// Call an external hypergraph partitioner
-fn run_par(hmetis_bin: &Path, hg: &RCHyperGraph, num_parts: usize) -> Vec<Vec<usize>> {
+/// Call builtin partitioner.
+fn run_par(hg: &RCHyperGraph, num_parts: usize) -> Vec<Vec<usize>> {
     clilog::debug!("invoking partitioner (#parts {})", num_parts);
-    use std::io::{BufRead, BufReader, BufWriter, Write};
-    use std::fs::File;
-
-    let tmp_dir = tempdir::TempDir::new("gemtemp").unwrap();
-    std::fs::create_dir_all(tmp_dir.path()).unwrap();
-    let hgr_path = tmp_dir.path().join("graph.hgr");
-    println!("hgr_path: {}", hgr_path.display());
-    let f = File::create(&hgr_path).unwrap();
-    let mut buf = BufWriter::new(f);
-    write!(buf, "{}", hg).unwrap();
-    buf.into_inner().unwrap().sync_all().unwrap();
-
-    std::process::Command::new(hmetis_bin)
-        .arg(&hgr_path)
-        .arg(format!("{}", num_parts))
-        .spawn()
-        .expect("hmetis failed!")
-        .wait().unwrap();
-
-    let path_parts = tmp_dir.path()
-        .join(format!("graph.hgr.part.{}", num_parts));
-    let mut parts = Vec::<Vec<usize>>::new();
-    let f_parts = File::open(&path_parts).unwrap();
-    let f_parts = BufReader::new(f_parts);
-    for (i, line) in f_parts.lines().enumerate() {
-        let line = line.unwrap();
-        if line.is_empty() { continue }
-        let part_id = line.parse::<usize>().unwrap();
-        while parts.len() <= part_id {
-            parts.push(vec![]);
-        }
+    let parts_ids = hg.partition(num_parts);
+    let mut parts = vec![vec![]; num_parts];
+    for (i, part_id) in parts_ids.into_iter().enumerate() {
         parts[part_id].push(i);
     }
-    clilog::info!("read parts file {} with {} parts",
-                  path_parts.display(), parts.len());
     parts
 }
 
 #[derive(clap::Parser, Debug)]
 struct SimulatorArgs {
-    /// Path to hmetis (or compatible partitioner) binary.
-    /// We will launch it with `/path/to/binary graph.hgr NUM_PARTS` and
-    /// expect a partition result with file name `graph.hgr.part.NUM_PARTS`.
-    ///
-    /// E.g.: `"/path/to/hmetis-2.0pre1/Linux-x86_64/hmetis2.0pre1"`
-    hmetis_bin: PathBuf,
     /// Gate-level verilog path synthesized in our provided library.
     ///
     /// If your design is still at RTL level, you should synthesize it
@@ -121,7 +85,7 @@ fn main() {
             clilog::info!("current: {} endpoints, try {} parts", unrealized_endpoints.len(), num_parts);
             let staged_ur = staged.to_endpoint_subset(&unrealized_endpoints);
             let hg_ur = RCHyperGraph::from_staged_aig(&aig, &staged_ur);
-            let mut parts_indices = run_par(&args.hmetis_bin, &hg_ur, num_parts);
+            let mut parts_indices = run_par(&hg_ur, num_parts);
             for idcs in &mut parts_indices {
                 for i in idcs {
                     *i = unrealized_endpoints[*i];

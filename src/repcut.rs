@@ -35,6 +35,7 @@ struct EndpointSet {
 }
 
 pub struct RCHyperGraph {
+    num_vertices: usize,
     clusters: IndexMap<CachedHash<EndpointSet>, usize>,
     endpoint_weights: Vec<u64>,
 }
@@ -166,19 +167,19 @@ impl RCHyperGraph {
 
         // println!("clusters: {:#?}, endpoint_weights: {:#?}", clusters, endpoint_weights);
         RCHyperGraph {
+            num_vertices: staged.num_endpoint_groups(),
             clusters, endpoint_weights
         }
     }
-}
 
-impl fmt::Display for RCHyperGraph {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut rng = ChaCha20Rng::seed_from_u64(8026727);
-        writeln!(f, "{} {} 11", self.clusters.len(), self.endpoint_weights.len())?;
-        for (s, v) in &self.clusters {
+    /// Make an edge list.
+    ///
+    /// (weight, node indices)
+    pub fn to_edges(&self) -> Vec<(usize, Vec<usize>)> {
+        self.clusters.par_iter().enumerate().map(|(i, (s, v))| {
+            let mut rng = ChaCha20Rng::seed_from_u64(8026727 + i as u64);
             let mut edgend = Vec::<usize>::new();
             let mut num_prev_nodes = 0;
-            edgend.reserve(REPCUT_HYPERGRAPH_EDGE_SIZE_LIMIT);
             for segment_i in 0..s.s.len() {
                 let bs_set = match &s.s[segment_i] {
                     Some(seg) => &seg.bs_set,
@@ -190,7 +191,7 @@ impl fmt::Display for RCHyperGraph {
                     }
                     for k in 0..64 {
                         if (bs_set[bs_i] >> k & 1) != 0 {
-                            let nd = segment_i * REPCUT_BITSET_BLOCK_SIZE + bs_i * 64 + k + 1;
+                            let nd = segment_i * REPCUT_BITSET_BLOCK_SIZE + bs_i * 64 + k;
                             if edgend.len() < REPCUT_HYPERGRAPH_EDGE_SIZE_LIMIT {
                                 edgend.push(nd);
                             }
@@ -202,9 +203,52 @@ impl fmt::Display for RCHyperGraph {
                     }
                 }
             }
+            (*v, edgend)
+        }).collect()
+    }
+
+    /// Run mt-kahypar to partition this hypergraph.
+    pub fn partition(&self, num_parts: usize) -> Vec<usize> {
+        let ctx = mt_kahypar::Context::builder()
+            .preset(mt_kahypar::Preset::Deterministic)
+            .k(num_parts as i32)
+            .epsilon(0.2)
+            .objective(mt_kahypar::Objective::Soed)
+            .verbose(true)
+            .build().unwrap();
+        let edges = self.to_edges();
+        let mut hyperedge_indices = Vec::with_capacity(edges.len() + 1);
+        hyperedge_indices.push(0);
+        hyperedge_indices.extend(edges.iter().scan(0, |acc, (_, edgend)| {
+            *acc += edgend.len();
+            Some(*acc)
+        }));
+        let mut hyperedges = Vec::with_capacity(hyperedge_indices[edges.len()]);
+        hyperedges.extend(edges.iter().flat_map(|(_, edgend)| {
+            edgend.iter().copied()
+        }));
+        let hyperedge_weights = edges.iter().map(|(v, _)| TryInto::<i32>::try_into(*v).unwrap()).collect::<Vec<_>>();
+        let vertex_weights = self.endpoint_weights.iter().map(|v| TryInto::<i32>::try_into(*v).unwrap()).collect::<Vec<_>>();
+        let hg = mt_kahypar::Hypergraph::from_adjacency(
+            &ctx,
+            self.num_vertices,
+            &hyperedge_indices,
+            &hyperedges,
+            Some(&hyperedge_weights),
+            Some(&vertex_weights)
+        ).unwrap();
+        let parts = hg.partition().unwrap();
+        parts.extract_partition().into_iter().map(|i| i as usize).collect()
+    }
+}
+
+impl fmt::Display for RCHyperGraph {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{} {} 11", self.clusters.len(), self.endpoint_weights.len())?;
+        for (v, edgend) in self.to_edges() {
             write!(f, "{}", v)?;
             for nd in edgend {
-                write!(f, " {}", nd)?;
+                write!(f, " {}", nd + 1)?;
             }
             writeln!(f)?;
         }
