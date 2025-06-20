@@ -1,6 +1,7 @@
 # Welcome to GEM
 GEM is an open-source RTL logic simulator with CUDA acceleration, developed and maintained by NVIDIA Research.
 GEM can deliver up to 5--40X speed-up compared to CPU-based leading RTL simulators.
+A summary of the work with paper can be found [here](https://research.nvidia.com/publication/2025-06_gem-gpu-accelerated-emulator-inspired-rtl-simulation).
 
 ## Compile and Run Your Design with GEM
 GEM works in a way similar to an FPGA-based RTL emulator.
