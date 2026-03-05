@@ -5,6 +5,7 @@
 fn main() {
     println!("Building cuda source files for GEM...");
     println!("cargo:rerun-if-changed=csrc");
+    println!("cargo:rerun-if-changed=msrc");
 
     #[cfg(feature = "cuda")] {
         let csrc_headers = ucc::import_csrc();
@@ -21,5 +22,19 @@ fn main() {
         ucc::bindgen(["csrc/kernel_v1.cu"], "kernel_v1.rs");
         ucc::export_csrc();
         ucc::make_compile_commands(&[&cl_cuda]);
+    }
+
+    #[cfg(feature = "metal")] {
+        let mut cl_metal = cc::Build::new();
+        cl_metal
+            .cpp(true)
+            .flag("-std=c++17")
+            .flag("-fobjc-arc")
+            .file("csrc/kernel_v1_metal.mm");
+        cl_metal.compile("gemmetal");
+
+        println!("cargo:rustc-link-lib=static=gemmetal");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rustc-link-lib=framework=Metal");
     }
 }

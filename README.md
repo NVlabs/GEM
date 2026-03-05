@@ -11,6 +11,17 @@ The synthesis and mapping is slower than the compiling/elaboration process of CP
 
 **See [usage.md](./usage.md) for usage documentation.**
 
+## Baseline Lock
+GEM includes a deterministic flatten baseline lock fixture for migration/regression checks:
+
+```sh
+cargo run --bin baseline_lock -- \
+  baseline/tiny_gatelevel.gv \
+  baseline/tiny.gemparts \
+  1 \
+  --expected-script-hash 14926125099726623616
+```
+
 ## Citation
 Please cite our paper if you find GEM useful.
 

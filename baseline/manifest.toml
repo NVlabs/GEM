@@ -1,0 +1,13 @@
+# Deterministic flatten baseline lock for migration checks.
+name = "tiny_v1"
+netlist_verilog = "baseline/tiny_gatelevel.gv"
+gemparts = "baseline/tiny.gemparts"
+num_blocks = 1
+level_split = []
+expected_script_hash = 14926125099726623616
+
+# Observed summary from baseline_lock on 2026-03-05:
+# major_stages = 1
+# reg_io_state_size = 129
+# sram_storage_size = 0
+# script_words = 18176
