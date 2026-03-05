@@ -7,7 +7,7 @@ use gem::staging::build_staged_aigs;
 use gem::pe::Partition;
 use gem::flatten::FlattenedScriptV1;
 use gem::gpu::backend::GpuBackendV1;
-use gem::gpu::cuda_backend::CudaBackend;
+use gem::gpu::metal_backend::MetalBackend;
 use netlistdb::{Direction, GeneralPinName, NetlistDB};
 use sverilogparse::SVerilogRange;
 use compact_str::CompactString;
@@ -51,7 +51,7 @@ struct SimulatorArgs {
     /// If not specified, we will use `gem_top_module`.
     #[clap(long)]
     output_vcd_scope: Option<String>,
-    /// the number of CUDA blocks to map and execute with.
+    /// the number of Metal blocks to map and execute with.
     ///
     /// should not exceed GPU maximum simutaneous occupancy.
     num_blocks: usize,
@@ -428,7 +428,7 @@ fn simulate_block_v1(
 
 fn main() {
     clilog::init_stderr_color_debug();
-    clilog::enable_timer("cuda_test");
+    clilog::enable_timer("metal_test");
     clilog::enable_timer("gem");
     clilog::set_max_print_count(clilog::Level::Warn, "NL_SV_LIT", 1);
     let args = <SimulatorArgs as clap::Parser>::parse();
@@ -668,10 +668,16 @@ fn main() {
     input_states.extend(state.iter().copied());
     clilog::info!("total number of cycles: {}", offsets_timestamps.len());
     let mut input_states_uvec: UVec<_> = input_states.clone().into();
-    let device = Device::CUDA(0);
+    let device = Device::CPU;
     input_states_uvec.as_mut_uptr(device);
     let mut sram_storage = UVec::new_zeroed(script.sram_storage_size as usize, device);
-    let backend = CudaBackend::new(device);
+    let backend = match MetalBackend::new() {
+        Ok(backend) => backend,
+        Err(err) => {
+            eprintln!("metal_test: {err}");
+            std::process::exit(2);
+        }
+    };
     backend.synchronize();
     let timer_sim = clilog::stimer!("simulation");
     backend.simulate_v1_noninteractive_simple_scan(

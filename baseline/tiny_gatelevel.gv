@@ -1,0 +1,19 @@
+module top(clk, a, b, y);
+  input clk;
+  input a;
+  input b;
+  output y;
+  wire n1;
+
+  AND2_11_0 u_and (
+    .A(a),
+    .B(b),
+    .Y(n1)
+  );
+
+  DFF u_dff (
+    .CLK(clk),
+    .D(n1),
+    .Q(y)
+  );
+endmodule

@@ -1,15 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-pub mod aigpdk;
 
-pub mod aig;
+pub mod backend;
 
-pub mod staging;
+#[cfg(feature = "cuda")]
+pub mod cuda_backend;
 
-pub mod repcut;
-
-pub mod pe;
-
-pub mod flatten;
-
-pub mod gpu;
+#[cfg(feature = "metal")]
+pub mod metal_backend;

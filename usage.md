@@ -120,6 +120,27 @@ cargo run -r --features cuda --bin cut_map_interactive -- --help
 cargo run -r --features cuda --bin cuda_test -- --help
 ```
 
+For migration/regression checks, GEM also provides a deterministic baseline lock command:
+``` sh
+cargo run --bin baseline_lock -- \
+  baseline/tiny_gatelevel.gv \
+  baseline/tiny.gemparts \
+  1 \
+  --expected-script-hash 14926125099726623616
+```
+
+Metal binaries are available with:
+``` sh
+# script build + execution smoke path
+cargo run --features metal --bin metal_dummy_test -- \
+  baseline/tiny_gatelevel.gv baseline/tiny.gemparts 1 1
+
+# end-to-end VCD simulation path (Metal backend)
+cargo run --features metal --bin metal_test -- \
+  baseline/tiny_gatelevel.gv baseline/tiny.gemparts \
+  baseline/tiny_input.vcd baseline/tiny_output_metal.vcd 5
+```
+
 ## Map the Design with GEM
 ~~GEM depends on an external hypergraph partitioner binary. We recommend hmetis 2.0. You can download its binary and put it in a proper location.~~
 GEM no longer depends on an external hypergraph partitioner. We now compile and link to [mt-kahypar-sc](https://github.com/gzz2000/mt-kahypar-sc) automatically. This is experimental and if you encounter partitioning issue you can raise it to us.

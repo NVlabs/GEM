@@ -24,10 +24,12 @@ ulib = { version = "0.3.13", path = "eda-infra-rs/ulib" }
 vcd-ng = { version = "0.2.0", path = "eda-infra-rs/vcd-ng" }
 
 [build-dependencies]
+cc = "1.2.56"
 ucc = { version = "0.2.5", path = "eda-infra-rs/ucc" }
 
 [features]
 cuda = ["ulib/cuda"]
+metal = []
 
 [[bin]]
 name = "cuda_test"
@@ -36,3 +38,11 @@ required-features = ["cuda"]
 [[bin]]
 name = "cuda_dummy_test"
 required-features = ["cuda"]
+
+[[bin]]
+name = "metal_test"
+required-features = ["metal"]
+
+[[bin]]
+name = "metal_dummy_test"
+required-features = ["metal"]
