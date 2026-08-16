@@ -113,7 +113,7 @@ impl RCHyperGraph {
         });
         // println!("sbn: {:?}", segments_blockid_nodeid);
         let mut clusters = IndexMap::<_, usize>::new();
-        for i in 1..aig.num_aigpins {
+        for i in 1..=aig.num_aigpins {
             let es = CachedHash::new(EndpointSet {
                 s: (0..num_blocks)
                     .map(|k| segments_blockid_nodeid[k][i]
