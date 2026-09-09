@@ -401,14 +401,15 @@ fn build_one_boomerang_stage(
     let mut realized_endpoints = IndexSet::new();
     let mut write_outs = Vec::new();
     // heuristically push level 1 endpoints.
-    while spaces_j < spaces.len() &&
+    while spaces_j < spaces.len() && endpt_lvl1_i < endpoints_lvl1.len() &&
         (endpoints_untouched.is_empty() || // if we can try all
          endpoints_lvl1.len() - endpt_lvl1_i >= (32 - spaces[spaces_j].0) as usize)
     {
         let i = spaces[spaces_j].1;
+        let mut group_has_endpoints = false;
+
         for j in i..i + 32 {
-            if endpt_lvl1_i >= endpoints_lvl1.len() { break }
-            if hier[1][j] == usize::MAX {
+            if endpt_lvl1_i < endpoints_lvl1.len() && hier[1][j] == usize::MAX {
                 let endpt_i = endpoints_lvl1[endpt_lvl1_i];
                 place_bit(
                     aig, &mut hier, &mut hier_visited_nodes_count,
@@ -417,13 +418,18 @@ fn build_one_boomerang_stage(
                 );
                 realized_endpoints.insert(endpt_i);
                 endpt_lvl1_i += 1;
+                group_has_endpoints = true;
             }
-            else if unrealized_comb_outputs.contains(&hier[1][j]) {
+            else if hier[1][j] != usize::MAX && unrealized_comb_outputs.contains(&hier[1][j]) {
                 realized_endpoints.insert(hier[1][j]);
+                group_has_endpoints = true;
             }
         }
-        *total_write_outs += 1;
-        write_outs.push((i + hier[1].len()) / 32);
+
+        if group_has_endpoints {
+            *total_write_outs += 1;
+            write_outs.push((i + hier[1].len()) / 32);
+        }
         spaces_j += 1;
     }
 
